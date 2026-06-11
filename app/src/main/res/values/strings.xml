@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Ostrava</string>
+    <string name="tracking_channel_name">Activity tracking</string>
+    <string name="tracking_channel_description">Live stats while recording an activity</string>
+</resources>

@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.Ostrava" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
+</resources>
