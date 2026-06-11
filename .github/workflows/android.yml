@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -31,3 +33,20 @@ jobs:
         with:
           name: ostrava-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      # Also publish the APK to an orphan branch so it can be fetched over git
+      # (artifact downloads require access to Azure blob storage).
+      - name: Publish APK to apk-dist branch
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p /tmp/dist
+          cp app/build/outputs/apk/debug/app-debug.apk /tmp/dist/ostrava-debug.apk
+          cd /tmp/dist
+          git init -b apk-dist
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add ostrava-debug.apk
+          git commit -m "Debug APK from ${GITHUB_SHA::7}"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" apk-dist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
