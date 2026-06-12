@@ -87,16 +87,32 @@ fun RouteMap(
             }
 
             if (followLast && markerPoint != null) {
-                map.controller.animateTo(GeoPoint(markerPoint.latitude, markerPoint.longitude))
-            } else if (!followLast && points.size >= 2) {
-                val box = BoundingBox.fromGeoPointsSafe(points.map { GeoPoint(it.latitude, it.longitude) })
-                map.post {
-                    try {
-                        map.zoomToBoundingBox(box.increaseByScale(1.4f), false)
-                    } catch (_: Exception) {
-                        // Map not laid out yet; keep default camera.
+                val target = GeoPoint(markerPoint.latitude, markerPoint.longitude)
+                val previous = map.tag as? GeoPoint
+                when {
+                    // First fix: jump straight there instead of animating from (0, 0).
+                    previous == null -> {
+                        map.controller.setCenter(target)
+                        map.tag = target
+                    }
+                    previous.latitude != target.latitude || previous.longitude != target.longitude -> {
+                        map.controller.animateTo(target)
+                        map.tag = target
                     }
                 }
+            } else if (!followLast && points.size >= 2) {
+                val box = BoundingBox.fromGeoPointsSafe(points.map { GeoPoint(it.latitude, it.longitude) })
+                // zoomToBoundingBox needs a measured view; before layout it is a no-op.
+                if (map.isLayoutOccurred) {
+                    map.zoomToBoundingBox(box.increaseByScale(1.4f), false)
+                } else {
+                    map.controller.setCenter(box.centerWithDateLine)
+                    map.addOnFirstLayoutListener { _, _, _, _, _ ->
+                        map.zoomToBoundingBox(box.increaseByScale(1.4f), false)
+                    }
+                }
+            } else if (!followLast && markerPoint != null) {
+                map.controller.setCenter(GeoPoint(markerPoint.latitude, markerPoint.longitude))
             }
             map.invalidate()
         },

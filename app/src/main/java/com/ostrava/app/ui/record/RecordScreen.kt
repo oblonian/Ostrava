@@ -38,7 +38,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.google.android.gms.location.LocationServices
 import com.ostrava.app.domain.ActivityType
+import com.ostrava.app.domain.TrackPoint
 import com.ostrava.app.domain.formatDistance
 import com.ostrava.app.domain.formatDuration
 import com.ostrava.app.domain.formatElevation
@@ -69,6 +71,31 @@ fun RecordScreen(
         )
     }
     var pendingStart by remember { mutableStateOf(false) }
+    var initialFix by remember { mutableStateOf<TrackPoint?>(null) }
+
+    // Centre the map on the athlete before recording starts; otherwise the map
+    // sits at (0, 0) until the tracking service produces the first fix.
+    LaunchedEffect(hasLocationPermission) {
+        if (hasLocationPermission && initialFix == null) {
+            try {
+                LocationServices.getFusedLocationProviderClient(context).lastLocation
+                    .addOnSuccessListener { location ->
+                        if (location != null) {
+                            initialFix = TrackPoint(
+                                latitude = location.latitude,
+                                longitude = location.longitude,
+                                altitude = if (location.hasAltitude()) location.altitude else 0.0,
+                                timeMillis = location.time,
+                                speedMps = 0f,
+                                segment = 0,
+                            )
+                        }
+                    }
+            } catch (_: SecurityException) {
+                // Permission revoked between check and call; map stays uncentred.
+            }
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -105,7 +132,7 @@ fun RecordScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         RouteMap(
             points = state.points,
-            currentFix = state.lastFix,
+            currentFix = state.lastFix ?: initialFix,
             followLast = true,
             modifier = Modifier
                 .fillMaxWidth()
