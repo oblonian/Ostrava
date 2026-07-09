@@ -47,6 +47,21 @@ fun formatElevation(meters: Double, imperial: Boolean): String =
     if (imperial) String.format(Locale.US, "%.0f ft", meters * FEET_PER_METER)
     else String.format(Locale.US, "%.0f m", meters)
 
+/** Duration phrased for text-to-speech, e.g. "1 hour 5 minutes 20 seconds". */
+fun spokenDuration(millis: Long): String {
+    val totalSeconds = millis / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return buildString {
+        if (hours > 0) append("$hours hour${if (hours != 1L) "s" else ""} ")
+        if (minutes > 0) append("$minutes minute${if (minutes != 1L) "s" else ""} ")
+        if (seconds > 0 || (hours == 0L && minutes == 0L)) {
+            append("$seconds second${if (seconds != 1L) "s" else ""}")
+        }
+    }.trim()
+}
+
 private val dateTimeFormatter = DateTimeFormatter.ofPattern("EEE, d MMM yyyy 'at' HH:mm", Locale.US)
 private val dateFormatter = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.US)
 

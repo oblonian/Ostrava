@@ -16,19 +16,30 @@ personal records and weekly training analytics.
 
 **Pro features**
 - **Auto-pause** — the clock stops when you stop, with per-sport thresholds
+- **Audio cues** — spoken split announcements (time + last-km pace) via TTS
+- **Interval workouts** — warmup / N×(work+rest) / cooldown with voice and
+  vibration guidance and a live phase banner
+- **Bluetooth heart rate** — standard BLE HR straps; live bpm while recording,
+  avg/max stored per activity
+- **Segments** — save any route as a segment; future activities covering it
+  are timed automatically and ranked against your best
 - **Splits** — per-km (or per-mile) splits with linear interpolation at split
   boundaries and pace bars
 - **Best efforts** — fastest 1k / 5k / 10k / half marathon (runs) or
   5k / 20k / 40k (rides) found with a sliding-window sweep
 - **Personal records** — longest distance, longest duration, biggest climb,
   fastest average
-- **Training analytics** — weekly distance chart for the last 12 weeks,
-  all-time totals, per-sport filtering
+- **Training analytics** — weekly/monthly distance charts, streaks,
+  training-load ramp warning, all-time totals, per-sport filtering
 - **Weekly distance goal** with progress tracking on the home feed
-- **GPX export** — share any activity as a standards-compliant GPX 1.1 file
+- **Route thumbnails** on every feed card, drawn straight from the GPS track
+- **Share image** — rendered summary card (route + stats) for social media
+- **GPX export & import**, plus full **JSON backup/restore** of all data
 - **Calorie estimation** (MET-based, using your weight)
 - **Heart rate zones** computed from your max HR
-- Metric / imperial units, dark theme
+- Perceived-effort rating on save, 3-2-1 start countdown, keep-screen-on,
+  discard confirmation, first-run onboarding
+- Metric / imperial units, dark theme incl. dark map tiles
 
 ## Architecture
 

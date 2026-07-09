@@ -8,6 +8,12 @@ private fun distanceBetween(a: TrackPoint, b: TrackPoint): Double {
     return results[0].toDouble()
 }
 
+private fun distanceToPoint(lat: Double, lon: Double, point: TrackPoint): Double {
+    val results = FloatArray(1)
+    Location.distanceBetween(lat, lon, point.latitude, point.longitude, results)
+    return results[0].toDouble()
+}
+
 /**
  * Buckets the track into consecutive splits of [splitLengthMeters], linearly interpolating
  * the boundary crossing time so split durations are accurate.
@@ -121,4 +127,140 @@ fun estimateCalories(type: ActivityType, avgSpeedMps: Double, movingTimeMillis: 
     }
     val hours = movingTimeMillis / 3_600_000.0
     return (met * weightKg * hours).toInt()
+}
+
+/** Summary stats derived from a raw track, used by GPX import and backup restore. */
+data class ComputedStats(
+    val distanceMeters: Double,
+    val movingTimeMillis: Long,
+    val elevationGainMeters: Double,
+    val avgSpeedMps: Double,
+    val maxSpeedMps: Double,
+)
+
+fun computeActivityStats(points: List<TrackPoint>): ComputedStats {
+    if (points.size < 2) return ComputedStats(0.0, 0L, 0.0, 0.0, 0.0)
+    var distance = 0.0
+    var movingTime = 0L
+    var gain = 0.0
+    var maxSpeed = 0.0
+    var altitudeBaseline = points.first().altitude
+
+    for (i in 1 until points.size) {
+        val prev = points[i - 1]
+        val point = points[i]
+        if (point.segment != prev.segment) {
+            altitudeBaseline = point.altitude
+            continue
+        }
+        val d = distanceBetween(prev, point)
+        val dt = point.timeMillis - prev.timeMillis
+        distance += d
+        // Gaps longer than 15 s are treated as standing still, not moving time.
+        if (dt in 1..15_000) {
+            movingTime += dt
+            val legSpeed = d / (dt / 1000.0)
+            if (legSpeed > maxSpeed && legSpeed < 40.0) maxSpeed = legSpeed
+        }
+        when {
+            point.altitude - altitudeBaseline >= 2.0 -> {
+                gain += point.altitude - altitudeBaseline
+                altitudeBaseline = point.altitude
+            }
+            point.altitude < altitudeBaseline -> altitudeBaseline = point.altitude
+        }
+    }
+    val avgSpeed = if (movingTime > 0) distance / (movingTime / 1000.0) else 0.0
+    return ComputedStats(distance, movingTime, gain, avgSpeed, maxSpeed)
+}
+
+/** A matched segment traversal within an activity. */
+data class SegmentMatch(
+    val durationMillis: Long,
+    val startTimeMillis: Long,
+)
+
+private const val SEGMENT_MATCH_RADIUS_METERS = 40.0
+
+/**
+ * Finds the fastest traversal of a segment (start gate -> end gate) within a track.
+ * A traversal counts when the path passes within [SEGMENT_MATCH_RADIUS_METERS] of both
+ * gates and covers a path length comparable to the segment's distance.
+ */
+fun matchSegment(
+    startLat: Double,
+    startLon: Double,
+    endLat: Double,
+    endLon: Double,
+    segmentDistanceMeters: Double,
+    points: List<TrackPoint>,
+): SegmentMatch? {
+    if (points.size < 2 || segmentDistanceMeters <= 0) return null
+    val n = points.size
+    val cumDistance = DoubleArray(n)
+    val cumTime = LongArray(n)
+    for (i in 1 until n) {
+        val sameSegment = points[i].segment == points[i - 1].segment
+        cumDistance[i] = cumDistance[i - 1] +
+            if (sameSegment) distanceBetween(points[i - 1], points[i]) else 0.0
+        cumTime[i] = cumTime[i - 1] +
+            if (sameSegment) points[i].timeMillis - points[i - 1].timeMillis else 0L
+    }
+
+    val minPath = segmentDistanceMeters * 0.75
+    val maxPath = segmentDistanceMeters * 1.35
+    var best: SegmentMatch? = null
+
+    var i = 0
+    while (i < n) {
+        if (distanceToPoint(startLat, startLon, points[i]) <= SEGMENT_MATCH_RADIUS_METERS) {
+            var j = i + 1
+            while (j < n && cumDistance[j] - cumDistance[i] <= maxPath) {
+                if (cumDistance[j] - cumDistance[i] >= minPath &&
+                    distanceToPoint(endLat, endLon, points[j]) <= SEGMENT_MATCH_RADIUS_METERS
+                ) {
+                    val duration = cumTime[j] - cumTime[i]
+                    if (duration > 0 && (best == null || duration < best.durationMillis)) {
+                        best = SegmentMatch(duration, points[i].timeMillis)
+                    }
+                    break
+                }
+                j++
+            }
+            // Skip past this start-gate cluster before looking for another traversal.
+            while (i + 1 < n &&
+                distanceToPoint(startLat, startLon, points[i + 1]) <= SEGMENT_MATCH_RADIUS_METERS
+            ) {
+                i++
+            }
+        }
+        i++
+    }
+    return best
+}
+
+/**
+ * Weekly streaks from the set of week indices that contain at least one activity.
+ * Returns (current, longest). The current streak tolerates the present week being
+ * empty so a Monday doesn't zero everyone's streak.
+ */
+fun weeklyStreaks(activeWeekIndices: Set<Long>, currentWeekIndex: Long): Pair<Int, Int> {
+    if (activeWeekIndices.isEmpty()) return 0 to 0
+
+    var current = 0
+    var week = if (currentWeekIndex in activeWeekIndices) currentWeekIndex else currentWeekIndex - 1
+    while (week in activeWeekIndices) {
+        current++
+        week--
+    }
+
+    var longest = 0
+    var run = 0
+    var previous: Long? = null
+    for (w in activeWeekIndices.sorted()) {
+        run = if (previous != null && w == previous + 1) run + 1 else 1
+        if (run > longest) longest = run
+        previous = w
+    }
+    return current to longest
 }

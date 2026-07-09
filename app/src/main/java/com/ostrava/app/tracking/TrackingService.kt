@@ -13,6 +13,10 @@ import android.os.Build
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.speech.tts.TextToSpeech
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -26,11 +30,15 @@ import com.ostrava.app.OstravaApp
 import com.ostrava.app.R
 import com.ostrava.app.data.db.ActivityEntity
 import com.ostrava.app.domain.ActivityType
+import com.ostrava.app.domain.IntervalConfig
+import com.ostrava.app.domain.IntervalPhase
+import com.ostrava.app.domain.METERS_PER_MILE
 import com.ostrava.app.domain.TrackPoint
 import com.ostrava.app.domain.defaultActivityTitle
 import com.ostrava.app.domain.estimateCalories
 import com.ostrava.app.domain.formatDistance
 import com.ostrava.app.domain.formatDuration
+import com.ostrava.app.domain.spokenDuration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,6 +48,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 class TrackingService : Service() {
 
@@ -52,10 +61,28 @@ class TrackingService : Service() {
     private var currentSegment = 0
     private var lastAcceptedPoint: TrackPoint? = null
     private var altitudeBaseline: Double? = null
+    private var lowSpeedSinceMillis: Long? = null
+
+    // Settings captured at start
     private var autoPauseEnabled = true
     private var weightKg = 70f
     private var imperialUnits = false
-    private var lowSpeedSinceMillis: Long? = null
+    private var audioCues = true
+    private var haptics = true
+
+    // Audio cues
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var lastAnnouncedSplit = 0
+    private var lastSplitTimeMillis = 0L
+
+    // Heart rate sampling
+    private val hrSamples = mutableListOf<Int>()
+
+    // Interval workout
+    private var intervalPhases: List<Pair<String, Int>> = emptyList()
+    private var lastPhaseIndex = -1
+    private var workoutCompleteAnnounced = false
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -67,16 +94,22 @@ class TrackingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> start(ActivityType.fromName(intent.getStringExtra(EXTRA_TYPE) ?: ActivityType.RUN.name))
+            ACTION_START -> start(
+                type = ActivityType.fromName(intent.getStringExtra(EXTRA_TYPE) ?: ActivityType.RUN.name),
+                intervals = IntervalConfig.fromIntArray(intent.getIntArrayExtra(EXTRA_WORKOUT)),
+            )
             ACTION_PAUSE -> pause(manual = true)
             ACTION_RESUME -> resume()
-            ACTION_FINISH -> finish()
+            ACTION_FINISH -> finish(
+                title = intent.getStringExtra(EXTRA_TITLE),
+                feel = intent.getStringExtra(EXTRA_FEEL),
+            )
             ACTION_DISCARD -> discard()
         }
         return START_STICKY
     }
 
-    private fun start(type: ActivityType) {
+    private fun start(type: ActivityType, intervals: IntervalConfig?) {
         if (TrackingStateHolder.state.value.isActive) return
         startTimeWallMillis = System.currentTimeMillis()
         lastTickElapsed = SystemClock.elapsedRealtime()
@@ -84,6 +117,12 @@ class TrackingService : Service() {
         lastAcceptedPoint = null
         altitudeBaseline = null
         lowSpeedSinceMillis = null
+        lastAnnouncedSplit = 0
+        lastSplitTimeMillis = 0L
+        hrSamples.clear()
+        intervalPhases = intervals?.phases() ?: emptyList()
+        lastPhaseIndex = -1
+        workoutCompleteAnnounced = false
         TrackingStateHolder.lastSavedActivityId.value = null
         TrackingStateHolder.state.value = RecordingState(status = TrackingStatus.TRACKING, type = type)
 
@@ -93,11 +132,22 @@ class TrackingService : Service() {
             autoPauseEnabled = settings.autoPauseEnabled
             weightKg = settings.weightKg
             imperialUnits = settings.imperialUnits
+            audioCues = settings.audioCuesEnabled
+            haptics = settings.hapticsEnabled
+        }
+
+        if (tts == null) {
+            tts = TextToSpeech(applicationContext) { status ->
+                ttsReady = status == TextToSpeech.SUCCESS
+                if (ttsReady) tts?.language = Locale.getDefault()
+            }
         }
 
         startForegroundWithNotification()
         requestLocationUpdates()
         startTicker()
+        vibrate(longArrayOf(0, 300))
+        speak("${type.label} started")
     }
 
     private fun pause(manual: Boolean) {
@@ -106,21 +156,26 @@ class TrackingService : Service() {
         TrackingStateHolder.state.value = state.copy(
             status = if (manual) TrackingStatus.PAUSED else TrackingStatus.AUTO_PAUSED,
         )
+        vibrate(longArrayOf(0, 150, 100, 150))
+        if (!manual) speak("Auto paused")
         updateNotification()
     }
 
     private fun resume() {
         val state = TrackingStateHolder.state.value
         if (state.status != TrackingStatus.PAUSED && state.status != TrackingStatus.AUTO_PAUSED) return
+        val wasAuto = state.status == TrackingStatus.AUTO_PAUSED
         currentSegment++
         lastAcceptedPoint = null
         lowSpeedSinceMillis = null
         lastTickElapsed = SystemClock.elapsedRealtime()
         TrackingStateHolder.state.value = state.copy(status = TrackingStatus.TRACKING)
+        vibrate(longArrayOf(0, 150))
+        if (wasAuto) speak("Resumed")
         updateNotification()
     }
 
-    private fun finish() {
+    private fun finish(title: String?, feel: String?) {
         val state = TrackingStateHolder.state.value
         if (!state.isActive) return
         stopLocationUpdates()
@@ -137,7 +192,8 @@ class TrackingService : Service() {
         val avgSpeed = state.avgSpeedMps
         val entity = ActivityEntity(
             type = state.type.name,
-            title = defaultActivityTitle(state.type, startTimeWallMillis),
+            title = title?.takeIf { it.isNotBlank() }
+                ?: defaultActivityTitle(state.type, startTimeWallMillis),
             startTime = startTimeWallMillis,
             endTime = endTime,
             movingTimeMillis = state.movingTimeMillis,
@@ -146,11 +202,15 @@ class TrackingService : Service() {
             maxSpeedMps = state.maxSpeedMps.toDouble(),
             elevationGainMeters = state.elevationGainMeters,
             calories = estimateCalories(state.type, avgSpeed, state.movingTimeMillis, weightKg),
+            avgHeartRate = hrSamples.takeIf { it.isNotEmpty() }?.let { it.sum() / it.size },
+            maxHeartRate = hrSamples.maxOrNull(),
+            feel = feel?.takeIf { it.isNotBlank() },
         )
         val points = state.points
         val repository = (application as OstravaApp).container.activityRepository
+        vibrate(longArrayOf(0, 300, 150, 300))
         scope.launch(Dispatchers.IO) {
-            val id = repository.saveActivity(entity, points)
+            val id = repository.saveActivityWithEfforts(entity, points)
             TrackingStateHolder.lastSavedActivityId.value = id
             launch(Dispatchers.Main) { shutdown() }
         }
@@ -171,6 +231,8 @@ class TrackingService : Service() {
 
     override fun onDestroy() {
         stopLocationUpdates()
+        tts?.shutdown()
+        tts = null
         scope.cancel()
         super.onDestroy()
     }
@@ -235,7 +297,25 @@ class TrackingService : Service() {
         }
 
         TrackingStateHolder.state.value = newState
+        announceSplitIfCrossed(newState)
         handleAutoPause(fix.speedMps)
+    }
+
+    /** Speaks a cue when the athlete crosses the next whole km/mile. */
+    private fun announceSplitIfCrossed(state: RecordingState) {
+        if (!audioCues) return
+        val splitLength = if (imperialUnits) METERS_PER_MILE else 1000.0
+        val completed = (state.distanceMeters / splitLength).toInt()
+        if (completed <= lastAnnouncedSplit) return
+        lastAnnouncedSplit = completed
+        val lapMillis = state.movingTimeMillis - lastSplitTimeMillis
+        lastSplitTimeMillis = state.movingTimeMillis
+        val unit = if (imperialUnits) "mile" else "kilometer"
+        val plural = if (completed == 1) unit else "${unit}s"
+        speak(
+            "$completed $plural. Total time ${spokenDuration(state.movingTimeMillis)}. " +
+                "Last $unit ${spokenDuration(lapMillis)}."
+        )
     }
 
     /** Hysteresis filter so barometric/GPS altitude noise does not inflate total climb. */
@@ -290,13 +370,70 @@ class TrackingService : Service() {
                 val now = SystemClock.elapsedRealtime()
                 val state = TrackingStateHolder.state.value
                 if (state.status == TrackingStatus.TRACKING) {
+                    val movingTime = state.movingTimeMillis + (now - lastTickElapsed)
+                    val bpm = HeartRateMonitor.bpm.value
+                    if (bpm != null && bpm > 30) hrSamples += bpm
+                    TrackingStateHolder.state.value = state.copy(
+                        movingTimeMillis = movingTime,
+                        heartRateBpm = bpm,
+                        intervalPhase = updateIntervalPhase(movingTime),
+                    )
+                } else if (state.isActive) {
                     TrackingStateHolder.state.value =
-                        state.copy(movingTimeMillis = state.movingTimeMillis + (now - lastTickElapsed))
+                        state.copy(heartRateBpm = HeartRateMonitor.bpm.value)
                 }
                 lastTickElapsed = now
                 if (++notificationCounter % 2 == 0) updateNotification()
                 delay(1000)
             }
+        }
+    }
+
+    /** Drives the interval workout off moving time; announces phase transitions. */
+    private fun updateIntervalPhase(movingTimeMillis: Long): IntervalPhase? {
+        if (intervalPhases.isEmpty()) return null
+        val elapsedSec = (movingTimeMillis / 1000).toInt()
+        var boundary = 0
+        intervalPhases.forEachIndexed { index, (name, durationSec) ->
+            boundary += durationSec
+            if (elapsedSec < boundary) {
+                if (index != lastPhaseIndex) {
+                    lastPhaseIndex = index
+                    speak(name.substringBefore('/').trim())
+                    vibrate(longArrayOf(0, 200, 100, 200))
+                }
+                return IntervalPhase(
+                    name = name,
+                    index = index + 1,
+                    total = intervalPhases.size,
+                    remainingSec = boundary - elapsedSec,
+                )
+            }
+        }
+        if (!workoutCompleteAnnounced) {
+            workoutCompleteAnnounced = true
+            speak("Workout complete. Great job.")
+            vibrate(longArrayOf(0, 300, 100, 300, 100, 300))
+        }
+        return null
+    }
+
+    private fun speak(text: String) {
+        if (!audioCues || !ttsReady) return
+        tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "ostrava-cue")
+    }
+
+    private fun vibrate(pattern: LongArray) {
+        if (!haptics) return
+        try {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+            vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+        } catch (_: Exception) {
         }
     }
 
@@ -347,6 +484,9 @@ class TrackingService : Service() {
         const val ACTION_FINISH = "com.ostrava.app.action.FINISH"
         const val ACTION_DISCARD = "com.ostrava.app.action.DISCARD"
         const val EXTRA_TYPE = "extra_type"
+        const val EXTRA_TITLE = "extra_title"
+        const val EXTRA_FEEL = "extra_feel"
+        const val EXTRA_WORKOUT = "extra_workout"
 
         const val NOTIFICATION_ID = 42
         private const val LOCATION_INTERVAL_MS = 2000L
@@ -356,11 +496,21 @@ class TrackingService : Service() {
         private const val ELEVATION_HYSTERESIS_METERS = 2.0
         private const val AUTO_PAUSE_DELAY_MS = 5000L
 
-        fun start(context: Context, type: ActivityType) {
+        fun start(context: Context, type: ActivityType, intervals: IntervalConfig? = null) {
             val intent = Intent(context, TrackingService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_TYPE, type.name)
+            intervals?.let { intent.putExtra(EXTRA_WORKOUT, it.toIntArray()) }
             ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun finish(context: Context, title: String?, feel: String?) {
+            context.startService(
+                Intent(context, TrackingService::class.java)
+                    .setAction(ACTION_FINISH)
+                    .putExtra(EXTRA_TITLE, title)
+                    .putExtra(EXTRA_FEEL, feel)
+            )
         }
 
         fun sendAction(context: Context, action: String) {

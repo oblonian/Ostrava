@@ -1,6 +1,7 @@
 package com.ostrava.app.tracking
 
 import com.ostrava.app.domain.ActivityType
+import com.ostrava.app.domain.IntervalPhase
 import com.ostrava.app.domain.TrackPoint
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -17,6 +18,8 @@ data class RecordingState(
     val points: List<TrackPoint> = emptyList(),
     val lastFix: TrackPoint? = null,
     val gpsAccuracyMeters: Float? = null,
+    val heartRateBpm: Int? = null,
+    val intervalPhase: IntervalPhase? = null,
 ) {
     val isActive: Boolean get() = status != TrackingStatus.IDLE
     val avgSpeedMps: Double

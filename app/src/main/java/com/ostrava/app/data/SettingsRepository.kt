@@ -24,6 +24,10 @@ class SettingsRepository(private val context: Context) {
         val AUTO_PAUSE = booleanPreferencesKey("auto_pause")
         val WEEKLY_GOAL_KM = floatPreferencesKey("weekly_goal_km")
         val MAX_HEART_RATE = intPreferencesKey("max_heart_rate")
+        val AUDIO_CUES = booleanPreferencesKey("audio_cues")
+        val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
+        val HAPTICS = booleanPreferencesKey("haptics")
+        val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
     }
 
     val settings: Flow<UserSettings> = context.dataStore.data.map { prefs ->
@@ -34,6 +38,10 @@ class SettingsRepository(private val context: Context) {
             autoPauseEnabled = prefs[Keys.AUTO_PAUSE] ?: true,
             weeklyGoalKm = prefs[Keys.WEEKLY_GOAL_KM] ?: 25f,
             maxHeartRate = prefs[Keys.MAX_HEART_RATE] ?: 190,
+            audioCuesEnabled = prefs[Keys.AUDIO_CUES] ?: true,
+            keepScreenOn = prefs[Keys.KEEP_SCREEN_ON] ?: true,
+            hapticsEnabled = prefs[Keys.HAPTICS] ?: true,
+            onboardingDone = prefs[Keys.ONBOARDING_DONE] ?: false,
         )
     }
 
@@ -54,4 +62,16 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setMaxHeartRate(value: Int) =
         context.dataStore.edit { it[Keys.MAX_HEART_RATE] = value }
+
+    suspend fun setAudioCues(value: Boolean) =
+        context.dataStore.edit { it[Keys.AUDIO_CUES] = value }
+
+    suspend fun setKeepScreenOn(value: Boolean) =
+        context.dataStore.edit { it[Keys.KEEP_SCREEN_ON] = value }
+
+    suspend fun setHaptics(value: Boolean) =
+        context.dataStore.edit { it[Keys.HAPTICS] = value }
+
+    suspend fun setOnboardingDone() =
+        context.dataStore.edit { it[Keys.ONBOARDING_DONE] = true }
 }

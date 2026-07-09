@@ -1,5 +1,7 @@
 package com.ostrava.app.ui.components
 
+import android.graphics.ColorMatrixColorFilter
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -20,6 +22,16 @@ import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 
+/** Inverts tile colors for dark theme so night-time maps aren't blinding. */
+private val DARK_TILE_FILTER = ColorMatrixColorFilter(
+    floatArrayOf(
+        -1f, 0f, 0f, 0f, 255f,
+        0f, -1f, 0f, 0f, 255f,
+        0f, 0f, -1f, 0f, 255f,
+        0f, 0f, 0f, 1f, 0f,
+    )
+)
+
 /**
  * OpenStreetMap view rendering the recorded route, one polyline per pause-segment.
  * [followLast] keeps the camera on the latest fix (live recording); otherwise the
@@ -35,6 +47,7 @@ fun RouteMap(
 ) {
     val context = LocalContext.current
     val routeColor = MaterialTheme.colorScheme.primary.toArgb()
+    val darkTheme = isSystemInDarkTheme()
     val mapView = remember {
         MapView(context).apply {
             setTileSource(TileSourceFactory.MAPNIK)
@@ -64,6 +77,7 @@ fun RouteMap(
         factory = { mapView },
         modifier = modifier,
         update = { map ->
+            map.overlayManager.tilesOverlay.setColorFilter(if (darkTheme) DARK_TILE_FILTER else null)
             map.overlays.clear()
 
             points.groupBy { it.segment }.toSortedMap().values.forEach { segment ->

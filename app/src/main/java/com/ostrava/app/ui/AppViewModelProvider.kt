@@ -15,6 +15,9 @@ import com.ostrava.app.ui.stats.StatsViewModel
 object AppViewModelProvider {
     val Factory = viewModelFactory {
         initializer {
+            MainViewModel(app().container.settingsRepository)
+        }
+        initializer {
             FeedViewModel(app().container.activityRepository, app().container.settingsRepository)
         }
         initializer {
@@ -24,7 +27,7 @@ object AppViewModelProvider {
             StatsViewModel(app().container.activityRepository, app().container.settingsRepository)
         }
         initializer {
-            ProfileViewModel(app().container.settingsRepository)
+            ProfileViewModel(app().container.settingsRepository, app().container.activityRepository)
         }
         initializer {
             ActivityDetailViewModel(

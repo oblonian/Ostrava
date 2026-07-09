@@ -49,6 +49,10 @@ data class UserSettings(
     val autoPauseEnabled: Boolean = true,
     val weeklyGoalKm: Float = 25f,
     val maxHeartRate: Int = 190,
+    val audioCuesEnabled: Boolean = true,
+    val keepScreenOn: Boolean = true,
+    val hapticsEnabled: Boolean = true,
+    val onboardingDone: Boolean = false,
 )
 
 data class HeartRateZone(
@@ -70,3 +74,61 @@ fun heartRateZones(maxHr: Int): List<HeartRateZone> {
         )
     }
 }
+
+/** Perceived-effort rating stored on an activity. */
+object Feel {
+    const val EASY = "EASY"
+    const val MODERATE = "MODERATE"
+    const val HARD = "HARD"
+
+    val options: List<Pair<String, String>> = listOf(
+        EASY to "😌 Easy",
+        MODERATE to "😤 Moderate",
+        HARD to "🥵 Hard",
+    )
+
+    fun label(value: String?): String? = options.firstOrNull { it.first == value }?.second
+}
+
+/** Structured interval workout: warmup, repeats of work/rest, cooldown (all seconds). */
+data class IntervalConfig(
+    val warmupSec: Int,
+    val workSec: Int,
+    val restSec: Int,
+    val repeats: Int,
+    val cooldownSec: Int,
+) {
+    /** Ordered (name, durationSec) phases; rest is skipped after the final work bout. */
+    fun phases(): List<Pair<String, Int>> = buildList {
+        if (warmupSec > 0) add("Warm-up" to warmupSec)
+        for (i in 1..repeats) {
+            add("Work $i/$repeats" to workSec)
+            if (restSec > 0 && i < repeats) add("Rest $i/$repeats" to restSec)
+        }
+        if (cooldownSec > 0) add("Cool-down" to cooldownSec)
+    }
+
+    fun summary(): String {
+        val work = formatDuration(workSec * 1000L)
+        return if (restSec > 0) "$repeats × $work / ${formatDuration(restSec * 1000L)}"
+        else "$repeats × $work"
+    }
+
+    fun toIntArray(): IntArray = intArrayOf(warmupSec, workSec, restSec, repeats, cooldownSec)
+
+    companion object {
+        fun fromIntArray(values: IntArray?): IntervalConfig? {
+            if (values == null || values.size != 5) return null
+            val config = IntervalConfig(values[0], values[1], values[2], values[3], values[4])
+            return if (config.workSec > 0 && config.repeats > 0) config else null
+        }
+    }
+}
+
+/** Live interval state surfaced on the record screen. */
+data class IntervalPhase(
+    val name: String,
+    val index: Int,
+    val total: Int,
+    val remainingSec: Int,
+)

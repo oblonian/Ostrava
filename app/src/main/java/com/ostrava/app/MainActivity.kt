@@ -28,8 +28,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.ostrava.app.ui.AppViewModelProvider
+import com.ostrava.app.ui.MainViewModel
 import com.ostrava.app.ui.detail.ActivityDetailScreen
 import com.ostrava.app.ui.feed.FeedScreen
+import com.ostrava.app.ui.onboarding.OnboardingScreen
 import com.ostrava.app.ui.profile.ProfileScreen
 import com.ostrava.app.ui.record.RecordScreen
 import com.ostrava.app.ui.stats.StatsScreen
@@ -72,6 +77,22 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun OstravaAppUi() {
+    val mainViewModel: MainViewModel = viewModel(factory = AppViewModelProvider.Factory)
+    val settings by mainViewModel.settings.collectAsStateWithLifecycle()
+
+    when {
+        settings == null -> {
+            // Settings still loading; render nothing to avoid an onboarding flash.
+        }
+        settings?.onboardingDone == false -> {
+            OnboardingScreen(onDone = { mainViewModel.completeOnboarding() })
+        }
+        else -> MainScaffold()
+    }
+}
+
+@Composable
+private fun MainScaffold() {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination

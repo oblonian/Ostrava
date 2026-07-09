@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.ostrava.app.data.ActivityRepository
 import com.ostrava.app.data.SettingsRepository
 import com.ostrava.app.data.db.ActivityEntity
+import com.ostrava.app.domain.TrackPoint
 import com.ostrava.app.domain.UserSettings
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -29,9 +30,22 @@ data class FeedUiState(
 )
 
 class FeedViewModel(
-    repository: ActivityRepository,
+    private val repository: ActivityRepository,
     settingsRepository: SettingsRepository,
 ) : ViewModel() {
+
+    private val thumbnailCache = mutableMapOf<Long, List<TrackPoint>>()
+
+    /** Downsampled track for the feed-card thumbnail; cached per activity. */
+    suspend fun trackFor(activityId: Long): List<TrackPoint> =
+        thumbnailCache.getOrPut(activityId) {
+            val points = repository.getTrackPoints(activityId)
+            if (points.size <= 80) points
+            else {
+                val step = points.size.toFloat() / 80
+                (0 until 80).map { points[(it * step).toInt()] }
+            }
+        }
 
     val uiState: StateFlow<FeedUiState> = combine(
         repository.observeActivities(),

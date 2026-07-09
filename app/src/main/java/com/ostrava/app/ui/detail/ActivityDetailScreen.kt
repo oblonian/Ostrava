@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -22,6 +23,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -40,6 +42,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ostrava.app.data.db.ActivityEntity
 import com.ostrava.app.domain.ActivityType
 import com.ostrava.app.domain.BestEffort
+import com.ostrava.app.domain.Feel
 import com.ostrava.app.domain.Split
 import com.ostrava.app.domain.formatDateTime
 import com.ostrava.app.domain.formatDistance
@@ -60,9 +63,11 @@ fun ActivityDetailScreen(
     viewModel: ActivityDetailViewModel = viewModel(factory = AppViewModelProvider.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val segmentEfforts by viewModel.segmentEfforts.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
+    var showSegmentDialog by remember { mutableStateOf(false) }
 
     val activity = uiState.activity
     if (uiState.loading || activity == null) {
@@ -103,15 +108,60 @@ fun ActivityDetailScreen(
                 IconButton(onClick = { showRenameDialog = true }) {
                     Icon(Icons.Filled.Edit, contentDescription = "Rename")
                 }
-                IconButton(onClick = { viewModel.exportGpx(context) }) {
-                    Icon(Icons.Filled.Share, contentDescription = "Export GPX")
-                }
                 IconButton(onClick = { showDeleteDialog = true }) {
                     Icon(Icons.Filled.Delete, contentDescription = "Delete")
                 }
             }
 
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { viewModel.shareImage(context) }) {
+                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Share image")
+                }
+                OutlinedButton(onClick = { viewModel.exportGpx(context) }) {
+                    Text("Export GPX")
+                }
+                OutlinedButton(onClick = { showSegmentDialog = true }) {
+                    Text("Make segment")
+                }
+            }
+
             StatGrid(activity = activity, type = type, imperial = imperial)
+
+            if (segmentEfforts.isNotEmpty()) {
+                Card {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Segments", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        segmentEfforts.forEach { effort ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(effort.segmentName, style = MaterialTheme.typography.bodyLarge)
+                                Row {
+                                    Text(
+                                        formatDuration(effort.durationMillis),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    if (effort.durationMillis <= effort.bestMillis) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            "PR 🏆",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             if (uiState.bestEfforts.isNotEmpty()) {
                 BestEffortsCard(efforts = uiState.bestEfforts, imperial = imperial)
@@ -163,6 +213,39 @@ fun ActivityDetailScreen(
         )
     }
 
+    if (showSegmentDialog) {
+        var segmentName by remember { mutableStateOf("${activity.title} segment") }
+        AlertDialog(
+            onDismissRequest = { showSegmentDialog = false },
+            title = { Text("Create segment") },
+            text = {
+                Column {
+                    Text(
+                        "Saves this route as a segment. Future ${type.label.lowercase()}s covering it " +
+                            "will be timed automatically and ranked against your best.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = segmentName,
+                        onValueChange = { segmentName = it },
+                        label = { Text("Segment name") },
+                        singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSegmentDialog = false
+                    if (segmentName.isNotBlank()) viewModel.createSegment(segmentName.trim())
+                }) { Text("Create") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSegmentDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+
     if (showRenameDialog) {
         var title by remember { mutableStateOf(activity.title) }
         AlertDialog(
@@ -201,6 +284,13 @@ private fun StatGrid(activity: ActivityEntity, type: ActivityType, imperial: Boo
                 StatTile("Climb", formatElevation(activity.elevationGainMeters, imperial))
                 StatTile("Max speed", formatSpeed(activity.maxSpeedMps, imperial))
                 StatTile("Calories", "${activity.calories} kcal")
+            }
+            if (activity.avgHeartRate != null || activity.feel != null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    StatTile("Avg HR", activity.avgHeartRate?.let { "$it bpm" } ?: "--")
+                    StatTile("Max HR", activity.maxHeartRate?.let { "$it bpm" } ?: "--")
+                    StatTile("Felt", Feel.label(activity.feel) ?: "--")
+                }
             }
         }
     }

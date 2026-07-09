@@ -2,6 +2,7 @@ package com.ostrava.app.ui.feed
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -21,7 +22,11 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +35,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ostrava.app.data.db.ActivityEntity
 import com.ostrava.app.domain.ActivityType
+import com.ostrava.app.domain.Feel
+import com.ostrava.app.domain.TrackPoint
 import com.ostrava.app.domain.formatDateTime
 import com.ostrava.app.domain.formatDistance
 import com.ostrava.app.domain.formatDistanceShort
@@ -38,6 +45,7 @@ import com.ostrava.app.domain.formatElevation
 import com.ostrava.app.domain.formatPace
 import com.ostrava.app.domain.formatSpeed
 import com.ostrava.app.ui.AppViewModelProvider
+import com.ostrava.app.ui.components.RouteThumbnail
 import com.ostrava.app.ui.components.StatTile
 import com.ostrava.app.ui.components.icon
 
@@ -74,10 +82,16 @@ fun FeedScreen(
             }
         }
         items(uiState.activities, key = { it.id }) { activity ->
+            var track by remember(activity.id) { mutableStateOf<List<TrackPoint>>(emptyList()) }
+            LaunchedEffect(activity.id) {
+                track = viewModel.trackFor(activity.id)
+            }
             ActivityCard(
                 activity = activity,
+                track = track,
                 imperial = uiState.settings.imperialUnits,
                 onClick = { onActivityClick(activity.id) },
+                modifier = Modifier.animateItem(),
             )
         }
     }
@@ -121,9 +135,15 @@ private fun WeeklySummaryCard(summary: WeeklySummary, imperial: Boolean, weeklyG
 }
 
 @Composable
-private fun ActivityCard(activity: ActivityEntity, imperial: Boolean, onClick: () -> Unit) {
+private fun ActivityCard(
+    activity: ActivityEntity,
+    track: List<TrackPoint>,
+    imperial: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val type = ActivityType.fromName(activity.type)
-    Card(modifier = Modifier.clickable(onClick = onClick)) {
+    Card(modifier = modifier.clickable(onClick = onClick)) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
@@ -133,17 +153,31 @@ private fun ActivityCard(activity: ActivityEntity, imperial: Boolean, onClick: (
                     modifier = Modifier.size(28.dp),
                 )
                 Spacer(Modifier.size(8.dp))
-                Column {
-                    Text(
-                        text = activity.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = activity.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Feel.label(activity.feel)?.let { feelLabel ->
+                            Spacer(Modifier.size(8.dp))
+                            Text(
+                                text = feelLabel.substringBefore(' '),
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                        }
+                    }
                     Text(
                         text = formatDateTime(activity.startTime),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                if (track.size >= 2) {
+                    Box(Modifier.size(72.dp)) {
+                        RouteThumbnail(points = track, modifier = Modifier.fillMaxSize())
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))

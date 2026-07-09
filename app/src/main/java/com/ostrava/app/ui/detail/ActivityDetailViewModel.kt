@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.ostrava.app.data.ActivityRepository
 import com.ostrava.app.data.SettingsRepository
 import com.ostrava.app.data.db.ActivityEntity
+import com.ostrava.app.data.db.EffortForActivity
 import com.ostrava.app.domain.ActivityType
 import com.ostrava.app.domain.BestEffort
 import com.ostrava.app.domain.METERS_PER_MILE
@@ -16,12 +17,15 @@ import com.ostrava.app.domain.UserSettings
 import com.ostrava.app.domain.bestEffortsFor
 import com.ostrava.app.domain.computeSplits
 import com.ostrava.app.export.GpxExporter
+import com.ostrava.app.export.ShareImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -46,6 +50,10 @@ class ActivityDetailViewModel(
 
     private val _uiState = MutableStateFlow(DetailUiState())
     val uiState: StateFlow<DetailUiState> = _uiState
+
+    val segmentEfforts: StateFlow<List<EffortForActivity>> =
+        repository.observeEffortsForActivity(activityId)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         combine(
@@ -121,6 +129,23 @@ class ActivityDetailViewModel(
         val activity = state.activity ?: return
         viewModelScope.launch(Dispatchers.IO) {
             GpxExporter.shareGpx(context, activity, state.points)
+        }
+    }
+
+    fun shareImage(context: Context) {
+        val state = _uiState.value
+        val activity = state.activity ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            ShareImage.share(context, activity, state.points, state.settings.imperialUnits)
+        }
+    }
+
+    fun createSegment(name: String) {
+        val state = _uiState.value
+        val activity = state.activity ?: return
+        if (state.points.size < 2) return
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.createSegmentFromActivity(activity, state.points, name)
         }
     }
 }
