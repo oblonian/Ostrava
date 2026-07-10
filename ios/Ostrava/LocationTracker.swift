@@ -161,10 +161,14 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             feel: feel,
             points: points
         )
-        let context = ModelContext(container)
-        context.insert(activity)
-        recordSegmentEfforts(for: activity, in: context)
-        try? context.save()
+        // Save on the main context: @Query-driven views don't reliably see
+        // changes saved through a sibling ModelContext on iOS 17.
+        MainActor.assumeIsolated {
+            let context = container.mainContext
+            context.insert(activity)
+            recordSegmentEfforts(for: activity, in: context)
+            try? context.save()
+        }
         vibrate(.success)
         lastSavedActivityUid = activity.uid
         reset()

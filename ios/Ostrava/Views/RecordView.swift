@@ -47,7 +47,8 @@ struct RecordView: View {
             guard countdown >= 0 else { return }
             if countdown > 0 {
                 try? await Task.sleep(for: .seconds(1))
-                if countdown > 0 { countdown -= 1 }
+                // A cancelled sleep returns immediately; don't fast-forward the countdown.
+                if !Task.isCancelled && countdown > 0 { countdown -= 1 }
             } else {
                 countdown = -1
                 tracker.start(type: selectedType, intervals: intervals)
@@ -281,8 +282,10 @@ private struct FinishSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        onSave(title.trimmingCharacters(in: .whitespaces), feel)
+                        // Dismiss first: finishing triggers navigation, and pushing while
+                        // the sheet is still up can drop the transition.
                         dismiss()
+                        onSave(title.trimmingCharacters(in: .whitespaces), feel)
                     }
                 }
                 ToolbarItem(placement: .cancellationAction) {

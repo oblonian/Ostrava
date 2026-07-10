@@ -18,6 +18,7 @@ struct ProfileView: View {
     @State private var showRestoreImporter = false
     @State private var showGpxImporter = false
     @State private var statusMessage: String?
+    @State private var backupURL: URL?
 
     private let gpxType = UTType(filenameExtension: "gpx") ?? .xml
 
@@ -70,9 +71,17 @@ struct ProfileView: View {
                 }
 
                 Section {
-                    if let url = BackupManager.exportURL(context: context) {
-                        ShareLink(item: url) {
-                            Label("Back up all data", systemImage: "square.and.arrow.up")
+                    // Serializing the whole history is too expensive to run in `body`,
+                    // so the backup file is created on demand.
+                    Button {
+                        backupURL = BackupManager.exportURL(context: context)
+                        statusMessage = backupURL == nil ? "Backup failed" : nil
+                    } label: {
+                        Label("Back up all data", systemImage: "square.and.arrow.up")
+                    }
+                    if let backupURL {
+                        ShareLink(item: backupURL) {
+                            Label("Share backup file", systemImage: "doc.zipper")
                         }
                     }
                     Button {

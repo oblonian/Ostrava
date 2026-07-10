@@ -26,6 +26,8 @@ final class HeartRateMonitor: NSObject, ObservableObject, CBCentralManagerDelega
     private var discovered: [UUID: CBPeripheral] = [:]
 
     func startScan() {
+        // Don't clobber an existing or in-progress connection.
+        guard state == .idle || state == .scanning else { return }
         if central == nil {
             central = CBCentralManager(delegate: self, queue: .main)
         }
@@ -72,7 +74,11 @@ final class HeartRateMonitor: NSObject, ObservableObject, CBCentralManagerDelega
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state == .poweredOn && state == .scanning {
+            // A scan requested before the radio was ready starts here instead.
             central.scanForPeripherals(withServices: [hrService])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+                self?.stopScan()
+            }
         } else if central.state != .poweredOn {
             state = .idle
         }

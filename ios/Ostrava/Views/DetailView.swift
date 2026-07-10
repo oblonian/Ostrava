@@ -19,6 +19,8 @@ struct DetailView: View {
     @State private var showSegmentAlert = false
     @State private var renameText = ""
     @State private var segmentName = ""
+    @State private var shareImageURL: URL?
+    @State private var gpxURL: URL?
 
     var body: some View {
         ScrollView {
@@ -49,8 +51,10 @@ struct DetailView: View {
         .task { load() }
         .alert("Delete activity?", isPresented: $showDeleteAlert) {
             Button("Delete", role: .destructive) {
-                deleteActivity()
+                // Leave the screen before deleting: re-rendering this view with a
+                // deleted @Model can crash on invalidated backing data.
                 dismiss()
+                DispatchQueue.main.async { deleteActivity() }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -62,6 +66,7 @@ struct DetailView: View {
                 if !renameText.trimmingCharacters(in: .whitespaces).isEmpty {
                     activity.title = renameText.trimmingCharacters(in: .whitespaces)
                     try? context.save()
+                    regenerateExports()
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -87,13 +92,13 @@ struct DetailView: View {
     private var actions: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                if let url = ShareImage.renderURL(activity: activity, imperial: imperial) {
+                if let url = shareImageURL {
                     ShareLink(item: url) {
                         Label("Share image", systemImage: "square.and.arrow.up")
                     }
                     .buttonStyle(.bordered)
                 }
-                if let url = GpxExporter.exportURL(activity: activity) {
+                if let url = gpxURL {
                     ShareLink(item: url) {
                         Label("GPX", systemImage: "doc.text")
                     }
@@ -257,6 +262,14 @@ struct DetailView: View {
         splits = computeSplits(points: trackPoints, splitLength: imperial ? metersPerMile : 1000)
         bestEfforts = bestEffortsFor(type: activity.type, points: trackPoints)
         loadEfforts()
+        regenerateExports()
+    }
+
+    /// Rendering the share image and writing the GPX are too expensive for `body`,
+    /// so they run once here (and again after a rename changes the title).
+    private func regenerateExports() {
+        shareImageURL = ShareImage.renderURL(activity: activity, imperial: imperial)
+        gpxURL = GpxExporter.exportURL(activity: activity)
     }
 
     private func loadEfforts() {

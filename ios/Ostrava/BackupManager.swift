@@ -5,21 +5,56 @@ import SwiftData
 /// Segment efforts are recomputed on restore by re-matching each activity.
 enum BackupManager {
 
+    /// Wire format matches the Android app exactly: epoch **milliseconds** and
+    /// track points as positional arrays [lat, lon, alt, timeMs, speed, segment],
+    /// so backups round-trip between the two apps.
+    struct PointDTO: Codable {
+        var point: TrackPoint
+
+        init(_ point: TrackPoint) {
+            self.point = point
+        }
+
+        init(from decoder: Decoder) throws {
+            var container = try decoder.unkeyedContainer()
+            let latitude = try container.decode(Double.self)
+            let longitude = try container.decode(Double.self)
+            let altitude = try container.decode(Double.self)
+            let timeMs = try container.decode(Double.self)
+            let speed = try container.decode(Double.self)
+            let segment = try container.decode(Int.self)
+            point = TrackPoint(
+                latitude: latitude, longitude: longitude, altitude: altitude,
+                time: timeMs / 1000.0, speed: speed, segment: segment
+            )
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.unkeyedContainer()
+            try container.encode(point.latitude)
+            try container.encode(point.longitude)
+            try container.encode(point.altitude)
+            try container.encode(Int64((point.time * 1000).rounded()))
+            try container.encode(point.speed)
+            try container.encode(point.segment)
+        }
+    }
+
     struct ActivityDTO: Codable {
         var type: String
         var title: String
-        var startTime: TimeInterval
-        var endTime: TimeInterval
-        var movingTime: TimeInterval
-        var distance: Double
-        var avgSpeed: Double
-        var maxSpeed: Double
-        var elevationGain: Double
+        var startTime: Int64          // epoch ms
+        var endTime: Int64            // epoch ms
+        var movingTimeMillis: Int64
+        var distanceMeters: Double
+        var avgSpeedMps: Double
+        var maxSpeedMps: Double
+        var elevationGainMeters: Double
         var calories: Int
         var avgHeartRate: Int?
         var maxHeartRate: Int?
         var feel: String?
-        var points: [TrackPoint]
+        var points: [PointDTO]
     }
 
     struct SegmentDTO: Codable {
@@ -29,8 +64,8 @@ enum BackupManager {
         var startLon: Double
         var endLat: Double
         var endLon: Double
-        var distance: Double
-        var createdAt: TimeInterval
+        var distanceMeters: Double
+        var createdAt: Int64          // epoch ms
     }
 
     struct BackupFile: Codable {
@@ -54,18 +89,18 @@ enum BackupManager {
                 ActivityDTO(
                     type: activity.typeRaw,
                     title: activity.title,
-                    startTime: activity.startTime.timeIntervalSince1970,
-                    endTime: activity.endTime.timeIntervalSince1970,
-                    movingTime: activity.movingTime,
-                    distance: activity.distance,
-                    avgSpeed: activity.avgSpeed,
-                    maxSpeed: activity.maxSpeed,
-                    elevationGain: activity.elevationGain,
+                    startTime: Int64((activity.startTime.timeIntervalSince1970 * 1000).rounded()),
+                    endTime: Int64((activity.endTime.timeIntervalSince1970 * 1000).rounded()),
+                    movingTimeMillis: Int64((activity.movingTime * 1000).rounded()),
+                    distanceMeters: activity.distance,
+                    avgSpeedMps: activity.avgSpeed,
+                    maxSpeedMps: activity.maxSpeed,
+                    elevationGainMeters: activity.elevationGain,
                     calories: activity.calories,
                     avgHeartRate: activity.avgHeartRate,
                     maxHeartRate: activity.maxHeartRate,
                     feel: activity.feel,
-                    points: activity.points
+                    points: activity.points.map { PointDTO($0) }
                 )
             },
             segments: segments.map { segment in
@@ -76,8 +111,8 @@ enum BackupManager {
                     startLon: segment.startLon,
                     endLat: segment.endLat,
                     endLon: segment.endLon,
-                    distance: segment.distance,
-                    createdAt: segment.createdAt.timeIntervalSince1970
+                    distanceMeters: segment.distance,
+                    createdAt: Int64((segment.createdAt.timeIntervalSince1970 * 1000).rounded())
                 )
             }
         )
@@ -102,11 +137,13 @@ enum BackupManager {
         else { return 0 }
 
         let existingActivities = (try? context.fetch(FetchDescriptor<Activity>())) ?? []
-        let existingStartTimes = Set(existingActivities.map { $0.startTime.timeIntervalSince1970 })
+        let existingStartTimes = Set(
+            existingActivities.map { Int64(($0.startTime.timeIntervalSince1970 * 1000).rounded()) }
+        )
         var segments = (try? context.fetch(FetchDescriptor<Segment>())) ?? []
 
         for dto in file.segments {
-            let createdAt = Date(timeIntervalSince1970: dto.createdAt)
+            let createdAt = Date(timeIntervalSince1970: Double(dto.createdAt) / 1000.0)
             if !segments.contains(where: { $0.createdAt == createdAt && $0.name == dto.name }) {
                 let segment = Segment(
                     name: dto.name,
@@ -115,7 +152,7 @@ enum BackupManager {
                     startLon: dto.startLon,
                     endLat: dto.endLat,
                     endLon: dto.endLon,
-                    distance: dto.distance,
+                    distance: dto.distanceMeters,
                     createdAt: createdAt
                 )
                 context.insert(segment)
@@ -128,18 +165,18 @@ enum BackupManager {
             let activity = Activity(
                 type: ActivityType(rawValue: dto.type) ?? .run,
                 title: dto.title,
-                startTime: Date(timeIntervalSince1970: dto.startTime),
-                endTime: Date(timeIntervalSince1970: dto.endTime),
-                movingTime: dto.movingTime,
-                distance: dto.distance,
-                avgSpeed: dto.avgSpeed,
-                maxSpeed: dto.maxSpeed,
-                elevationGain: dto.elevationGain,
+                startTime: Date(timeIntervalSince1970: Double(dto.startTime) / 1000.0),
+                endTime: Date(timeIntervalSince1970: Double(dto.endTime) / 1000.0),
+                movingTime: Double(dto.movingTimeMillis) / 1000.0,
+                distance: dto.distanceMeters,
+                avgSpeed: dto.avgSpeedMps,
+                maxSpeed: dto.maxSpeedMps,
+                elevationGain: dto.elevationGainMeters,
                 calories: dto.calories,
                 avgHeartRate: dto.avgHeartRate,
                 maxHeartRate: dto.maxHeartRate,
                 feel: dto.feel,
-                points: dto.points
+                points: dto.points.map(\.point)
             )
             context.insert(activity)
             recordEfforts(for: activity, segments: segments, context: context)
@@ -159,8 +196,11 @@ enum BackupManager {
         guard stats.distance >= 10 else { return false }
 
         let startTime = parsed.points[0].time
+        let startMs = Int64((startTime * 1000).rounded())
         let existing = (try? context.fetch(FetchDescriptor<Activity>())) ?? []
-        guard !existing.contains(where: { $0.startTime.timeIntervalSince1970 == startTime }) else {
+        guard !existing.contains(where: {
+            Int64(($0.startTime.timeIntervalSince1970 * 1000).rounded()) == startMs
+        }) else {
             return false
         }
 
