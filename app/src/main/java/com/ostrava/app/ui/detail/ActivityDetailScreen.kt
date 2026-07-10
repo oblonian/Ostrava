@@ -331,7 +331,7 @@ private fun BestEffortsCard(efforts: List<BestEffort>, imperial: Boolean) {
 
 @Composable
 private fun SplitsCard(splits: List<Split>, imperial: Boolean, usesPace: Boolean) {
-    val slowestPace = splits.maxOf { it.paceSecondsPerKm }.takeIf { it > 0 } ?: 1.0
+    val fastestPace = splits.map { it.paceSecondsPerKm }.filter { it > 0 }.minOrNull() ?: 1.0
     val unitLabel = if (imperial) "mi" else "km"
     Card {
         Column(Modifier.padding(16.dp)) {
@@ -366,7 +366,7 @@ private fun SplitsCard(splits: List<Split>, imperial: Boolean, usesPace: Boolean
                     )
                     HorizontalBar(
                         // Faster splits get longer bars.
-                        fraction = (slowestPace / split.paceSecondsPerKm.coerceAtLeast(1.0)).toFloat()
+                        fraction = (fastestPace / split.paceSecondsPerKm.coerceAtLeast(1.0)).toFloat()
                             .coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
                     )

@@ -1,8 +1,9 @@
 # Ostrava
 
-A Strava-style activity tracker for Android, built with Kotlin and Jetpack Compose.
-Track runs, rides, walks and hikes with live GPS, then dig into splits, charts,
-personal records and weekly training analytics.
+A Strava-style activity tracker for **Android** (Kotlin + Jetpack Compose) and
+**iOS** (Swift + SwiftUI). Track runs, rides, walks and hikes with live GPS,
+then dig into splits, charts, personal records and weekly training analytics.
+Both apps share the same feature set and data formats (GPX, JSON backup).
 
 ## Features
 
@@ -62,7 +63,26 @@ app/src/main/java/com/ostrava/app/
 └── ui/            Compose screens: feed, record, detail, stats, profile
 ```
 
-## Building
+## iOS app
+
+`ios/` contains the native SwiftUI variant (iOS 17+): CoreLocation tracking
+with auto-pause and background recording, MapKit route maps, SwiftData
+persistence, AVSpeech voice cues, CoreBluetooth heart-rate sensors, interval
+workouts, segments, Swift Charts analytics, GPX import/export, JSON
+backup/restore and a share-image renderer.
+
+```bash
+cd ios
+brew install xcodegen
+xcodegen generate      # produces Ostrava.xcodeproj
+open Ostrava.xcodeproj # set your signing team, then run on a device
+```
+
+Running on a physical iPhone requires signing with your Apple ID in Xcode
+(Signing & Capabilities → Team). CI builds the app for the iOS Simulator on
+every push and uploads it as the `ostrava-ios-simulator` artifact.
+
+## Building (Android)
 
 Requires JDK 17+ and the Android SDK (compileSdk 35).
 
@@ -72,7 +92,7 @@ Requires JDK 17+ and the Android SDK (compileSdk 35).
 ```
 
 CI builds a debug APK on every push — grab it from the workflow run's
-artifacts.
+artifacts or the `apk-dist` branch.
 
 ## Permissions
 

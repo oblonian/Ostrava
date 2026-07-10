@@ -1,0 +1,39 @@
+name: Ostrava
+options:
+  bundleIdPrefix: com.ostrava
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  Ostrava:
+    type: application
+    platform: iOS
+    sources:
+      - Ostrava
+    info:
+      path: Ostrava/Info.plist
+      properties:
+        CFBundleDisplayName: Ostrava
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocationWhenInUseUsageDescription: >-
+          Ostrava uses your location to record the route, distance and pace of
+          your activities.
+        NSLocationAlwaysAndWhenInUseUsageDescription: >-
+          Allowing background location keeps recording your route with the
+          screen off or the app in the background.
+        NSBluetoothAlwaysUsageDescription: >-
+          Bluetooth is used to connect heart-rate sensors.
+        UIBackgroundModes:
+          - location
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ostrava.app
+        MARKETING_VERSION: "1.1.0"
+        CURRENT_PROJECT_VERSION: "2"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO

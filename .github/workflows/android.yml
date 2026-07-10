@@ -1,4 +1,4 @@
-name: Android CI
+name: CI
 
 on:
   push:
@@ -50,3 +50,34 @@ jobs:
           git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" apk-dist
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec ios/project.yml --project ios
+
+      - name: Build (iOS Simulator)
+        run: >
+          xcodebuild
+          -project ios/Ostrava.xcodeproj
+          -target Ostrava
+          -sdk iphonesimulator
+          -configuration Debug
+          build
+          CODE_SIGNING_ALLOWED=NO
+          SYMROOT=$PWD/ios/build
+
+      - name: Package simulator app
+        run: cd ios/build/Debug-iphonesimulator && zip -ry ostrava-ios-simulator.zip Ostrava.app
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: ostrava-ios-simulator
+          path: ios/build/Debug-iphonesimulator/ostrava-ios-simulator.zip
