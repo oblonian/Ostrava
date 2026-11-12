@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ostrava.app.data.ActivityRepository
 import com.ostrava.app.data.SettingsRepository
+import com.ostrava.app.domain.ReminderSlot
 import com.ostrava.app.domain.UserSettings
 import com.ostrava.app.export.BackupManager
 import com.ostrava.app.export.GpxImporter
@@ -47,6 +48,14 @@ class ProfileViewModel(
         viewModelScope.launch { settingsRepository.setKeepScreenOn(value) }
 
     fun setHaptics(value: Boolean) = viewModelScope.launch { settingsRepository.setHaptics(value) }
+
+    fun setReminders(value: Boolean) = viewModelScope.launch { settingsRepository.setReminders(value) }
+
+    fun setReminderSlot(value: ReminderSlot) =
+        viewModelScope.launch { settingsRepository.setReminderSlot(value) }
+
+    fun setHealthConnect(value: Boolean) =
+        viewModelScope.launch { settingsRepository.setHealthConnect(value) }
 
     fun backup(context: Context, uri: Uri) {
         viewModelScope.launch {

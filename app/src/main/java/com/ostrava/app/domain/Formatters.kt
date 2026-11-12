@@ -82,3 +82,34 @@ fun defaultActivityTitle(type: ActivityType, startMillis: Long): String {
     }
     return "$period ${type.label}"
 }
+
+private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.US)
+private val shortDayFormatter = DateTimeFormatter.ofPattern("EEE d MMM", Locale.US)
+
+/** "Today · 07:12", "Yesterday · 18:30" or "Mon 9 Nov · 07:12" (with the year when it isn't this one). */
+fun formatRelativeDay(epochMillis: Long, nowMillis: Long = System.currentTimeMillis()): String {
+    val zone = ZoneId.systemDefault()
+    val moment = Instant.ofEpochMilli(epochMillis).atZone(zone)
+    val today = Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
+    val date = moment.toLocalDate()
+    val day = when {
+        date == today -> "Today"
+        date == today.minusDays(1) -> "Yesterday"
+        date.year == today.year -> shortDayFormatter.format(moment)
+        else -> dateFormatter.format(moment)
+    }
+    return "$day · ${timeFormatter.format(moment)}"
+}
+
+/** "Good morning", "Good afternoon" or "Good evening" for the given hour of the day. */
+fun greetingFor(hour: Int): String = when (hour) {
+    in 5..11 -> "Good morning"
+    in 12..17 -> "Good afternoon"
+    else -> "Good evening"
+}
+
+fun formatWeight(kg: Float, imperial: Boolean): String =
+    if (imperial) String.format(Locale.US, "%.0f lb", kg * POUNDS_PER_KG)
+    else String.format(Locale.US, "%.0f kg", kg)
+
+const val POUNDS_PER_KG = 2.20462f

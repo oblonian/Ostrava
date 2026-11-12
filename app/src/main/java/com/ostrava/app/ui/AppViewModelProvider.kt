@@ -16,7 +16,11 @@ import com.ostrava.app.ui.stats.StatsViewModel
 object AppViewModelProvider {
     val Factory = viewModelFactory {
         initializer {
-            MainViewModel(app().container.settingsRepository)
+            MainViewModel(
+                settingsRepository = app().container.settingsRepository,
+                draftRepository = app().container.draftRepository,
+                recovery = app().container.recordingRecovery,
+            )
         }
         initializer {
             FeedViewModel(app().container.activityRepository, app().container.settingsRepository)

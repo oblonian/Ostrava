@@ -9,8 +9,9 @@ import com.ostrava.app.tracking.TrackingStateHolder
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
-class RecordViewModel(settingsRepository: SettingsRepository) : ViewModel() {
+class RecordViewModel(private val settingsRepository: SettingsRepository) : ViewModel() {
 
     val recordingState: StateFlow<RecordingState> = TrackingStateHolder.state
 
@@ -18,6 +19,10 @@ class RecordViewModel(settingsRepository: SettingsRepository) : ViewModel() {
 
     val settings: StateFlow<UserSettings> = settingsRepository.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UserSettings())
+
+    fun dismissBatteryPrompt() {
+        viewModelScope.launch { settingsRepository.setBatteryPromptDismissed() }
+    }
 
     fun consumeSavedActivityId() {
         TrackingStateHolder.lastSavedActivityId.value = null

@@ -5,6 +5,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,7 +52,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -86,7 +90,11 @@ fun ShareScreen(
         if (taken && uri != null) viewModel.setPhoto(context, uri)
     }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -130,7 +138,17 @@ fun ShareScreen(
                         contentDescription = "Preview of the image that will be shared",
                         modifier = Modifier
                             .aspectRatio(spec.aspect.width.toFloat() / spec.aspect.height)
-                            .clip(RoundedCornerShape(16.dp)),
+                            .clip(RoundedCornerShape(16.dp))
+                            // The sticker is see-through; a dark backing makes its white text visible here.
+                            .background(
+                                if (spec.template == ShareTemplate.STICKER) Color(0xFF3A3F45) else Color.Transparent,
+                            )
+                            // Drag to reframe the photo, pinch to zoom it.
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    viewModel.movePhoto(pan.x / size.width, pan.y / size.height, zoom)
+                                }
+                            },
                     )
                 } else {
                     CircularProgressIndicator()
@@ -138,13 +156,72 @@ fun ShareScreen(
             }
 
             Section("Style") {
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    ShareTemplate.entries.forEachIndexed { index, template ->
-                        SegmentedButton(
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ShareTemplate.entries.forEach { template ->
+                        FilterChip(
                             selected = spec.template == template,
                             onClick = { viewModel.update { it.copy(template = template) } },
-                            shape = SegmentedButtonDefaults.itemShape(index, ShareTemplate.entries.size),
-                        ) { Text(template.label) }
+                            label = { Text(template.label) },
+                        )
+                    }
+                }
+                val hint = when (spec.template) {
+                    ShareTemplate.STICKER ->
+                        "Saved with a transparent background, ready to drop onto your own photo or story."
+                    ShareTemplate.MAP -> "Your route on a real map."
+                    else -> null
+                }
+                if (hint != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        hint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            if (spec.template == ShareTemplate.MAP) {
+                Section("Map") {
+                    when {
+                        uiState.mapLoading -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text("Loading the map…", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        uiState.mapUnavailable -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "Couldn't load the map. Check your connection.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { viewModel.retryMap() }) { Text("Retry") }
+                        }
+                        else -> {
+                            Text("Darken map", style = MaterialTheme.typography.labelLarge)
+                            Slider(
+                                value = spec.photoDim,
+                                onValueChange = { value -> viewModel.update { it.copy(photoDim = value) } },
+                                valueRange = 0f..0.7f,
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (spec.template != ShareTemplate.MINIMAL) {
+                Section("Text position") {
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        SegmentedButton(
+                            selected = !spec.textAtTop,
+                            onClick = { viewModel.update { it.copy(textAtTop = false) } },
+                            shape = SegmentedButtonDefaults.itemShape(0, 2),
+                        ) { Text("Bottom") }
+                        SegmentedButton(
+                            selected = spec.textAtTop,
+                            onClick = { viewModel.update { it.copy(textAtTop = true) } },
+                            shape = SegmentedButtonDefaults.itemShape(1, 2),
+                        ) { Text("Top") }
                     }
                 }
             }
@@ -179,6 +256,12 @@ fun ShareScreen(
                         }
                     }
                     if (uiState.hasPhoto) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Drag the preview to move the photo, pinch to zoom.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Spacer(Modifier.height(8.dp))
                         Text("Darken photo", style = MaterialTheme.typography.labelLarge)
                         Slider(

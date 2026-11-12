@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -19,7 +20,10 @@ fun RouteThumbnail(
     points: List<TrackPoint>,
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.primary,
+    /** When set, only this index range is drawn in [color]; the rest is faded. */
+    highlight: IntRange? = null,
 ) {
+    val faded = MaterialTheme.colorScheme.outlineVariant
     Canvas(modifier = modifier) {
         if (points.size < 2) return@Canvas
         val minLat = points.minOf { it.latitude }
@@ -35,19 +39,39 @@ fun RouteThumbnail(
         val offsetX = pad + (size.width - 2 * pad - (spanX * scale).toFloat()) / 2f
         val offsetY = pad + (size.height - 2 * pad - (spanY * scale).toFloat()) / 2f
 
-        points.groupBy { it.segment }.toSortedMap().values.forEach { segment ->
-            if (segment.size < 2) return@forEach
-            val path = Path()
-            segment.forEachIndexed { i, p ->
-                val x = offsetX + ((p.longitude - minLon) * lonScale * scale).toFloat()
-                val y = offsetY + ((maxLat - p.latitude) * scale).toFloat()
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        fun position(point: TrackPoint) = Offset(
+            offsetX + ((point.longitude - minLon) * lonScale * scale).toFloat(),
+            offsetY + ((maxLat - point.latitude) * scale).toFloat(),
+        )
+        val stroke = Stroke(width = 2.5f.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+
+        /** One path per pause-separated segment, restricted to [range]. */
+        fun draw(range: IntRange, pathColor: Color, style: Stroke) {
+            var path: Path? = null
+            var previousSegment: Int? = null
+            for (index in range) {
+                val point = points[index]
+                val at = position(point)
+                if (path == null || point.segment != previousSegment) {
+                    path?.let { drawPath(it, color = pathColor, style = style) }
+                    path = Path().apply { moveTo(at.x, at.y) }
+                } else {
+                    path.lineTo(at.x, at.y)
+                }
+                previousSegment = point.segment
             }
-            drawPath(
-                path,
-                color = color,
-                style = Stroke(width = 2.5f.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
-            )
+            path?.let { drawPath(it, color = pathColor, style = style) }
+        }
+
+        if (highlight == null) {
+            draw(points.indices, color, stroke)
+        } else {
+            val range = highlight.first.coerceIn(0, points.lastIndex)..highlight.last.coerceIn(0, points.lastIndex)
+            draw(points.indices, faded, stroke)
+            draw(range, color, Stroke(width = 4f.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+            // Mark where the highlighted stretch starts and ends.
+            drawCircle(color, radius = 5f.dp.toPx(), center = position(points[range.first]))
+            drawCircle(color, radius = 5f.dp.toPx(), center = position(points[range.last]))
         }
     }
 }

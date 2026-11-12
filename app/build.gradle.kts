@@ -61,6 +61,8 @@ android {
 }
 
 tasks.withType<Test>().configureEach {
+    // Makes the screenshot tests write their images (to app/build/screenshots).
+    systemProperty("roborazzi.test.record", "true")
     testLogging {
         events("failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
@@ -96,5 +98,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

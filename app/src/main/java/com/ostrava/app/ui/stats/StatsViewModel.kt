@@ -60,11 +60,23 @@ data class MilestoneRecord(
     val isRecent: Boolean,
 )
 
+/** One effort over a benchmark distance, for the record-history view. */
+data class EffortHistoryEntry(
+    val activityId: Long,
+    val activityTitle: String,
+    val durationMillis: Long,
+    val achievedAt: Long,
+)
+
 data class RecordsUiState(
     val sport: ActivityType? = null,
     val availableSports: List<ActivityType> = emptyList(),
     val efforts: List<EffortRecord> = emptyList(),
     val milestones: List<MilestoneRecord> = emptyList(),
+    /** True when only this calendar year's records are shown. */
+    val thisYearOnly: Boolean = false,
+    /** Every effort per distance, oldest first, to show how a record progressed. */
+    val history: Map<String, List<EffortHistoryEntry>> = emptyMap(),
 )
 
 data class TrainingLoad(
@@ -98,6 +110,7 @@ class StatsViewModel(
     private val typeFilter = MutableStateFlow<ActivityType?>(null)
     private val chartPeriod = MutableStateFlow(ChartPeriod.WEEKLY)
     private val recordsSport = MutableStateFlow<ActivityType?>(null)
+    private val recordsThisYear = MutableStateFlow(false)
 
     private class Base(val state: StatsUiState, val allActivities: List<ActivityEntity>)
 
@@ -138,13 +151,15 @@ class StatsViewModel(
         base,
         repository.observeAllBestEfforts(),
         recordsSport,
-    ) { base, efforts, chosenSport ->
+        recordsThisYear,
+    ) { base, efforts, chosenSport, thisYearOnly ->
         base.state.copy(
             records = buildRecords(
                 allActivities = base.allActivities,
                 efforts = efforts,
                 chosenSport = chosenSport ?: base.state.typeFilter,
                 imperial = base.state.settings.imperialUnits,
+                thisYearOnly = thisYearOnly,
             ),
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StatsUiState())
@@ -157,6 +172,10 @@ class StatsViewModel(
 
     fun setRecordsSport(type: ActivityType) {
         recordsSport.value = type
+    }
+
+    fun setRecordsThisYear(thisYearOnly: Boolean) {
+        recordsThisYear.value = thisYearOnly
     }
 
     fun setChartPeriod(period: ChartPeriod) {
@@ -234,20 +253,32 @@ class StatsViewModel(
         efforts: List<EffortWithActivity>,
         chosenSport: ActivityType?,
         imperial: Boolean,
+        thisYearOnly: Boolean,
     ): RecordsUiState {
-        if (allActivities.isEmpty()) return RecordsUiState()
+        if (allActivities.isEmpty()) return RecordsUiState(thisYearOnly = thisYearOnly)
         val countBySport = allActivities.groupingBy { it.type }.eachCount()
         val availableSports = ActivityType.entries.filter { (countBySport[it.name] ?: 0) > 0 }
         // Default to the sport the athlete does most.
         val sport = chosenSport?.takeIf { it in availableSports }
             ?: availableSports.maxByOrNull { countBySport[it.name] ?: 0 }
-            ?: return RecordsUiState()
+            ?: return RecordsUiState(thisYearOnly = thisYearOnly)
 
         val now = System.currentTimeMillis()
         fun recent(time: Long) = now - time < RECENT_WINDOW_MILLIS
+        val yearStart = LocalDate.now().withDayOfYear(1)
+            .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        fun inScope(time: Long) = !thisYearOnly || time >= yearStart
 
-        val effortRecords = efforts
-            .filter { it.activityType == sport.name }
+        val sportEfforts = efforts.filter { it.activityType == sport.name && inScope(it.achievedAt) }
+        val history = sportEfforts
+            .groupBy { it.label }
+            .mapValues { (_, sameDistance) ->
+                sameDistance.sortedBy { it.achievedAt }.map {
+                    EffortHistoryEntry(it.activityId, it.activityTitle, it.durationMillis, it.achievedAt)
+                }
+            }
+
+        val effortRecords = sportEfforts
             .groupBy { it.label }
             .values
             .mapNotNull { sameDistance ->
@@ -269,7 +300,7 @@ class StatsViewModel(
             }
             .sortedBy { it.distanceMeters }
 
-        val activities = allActivities.filter { it.type == sport.name }
+        val activities = allActivities.filter { it.type == sport.name && inScope(it.startTime) }
         val milestones = buildList {
             fun fromActivity(label: String, activity: ActivityEntity?, value: (ActivityEntity) -> String) {
                 if (activity == null) return
@@ -345,6 +376,8 @@ class StatsViewModel(
             availableSports = availableSports,
             efforts = effortRecords,
             milestones = milestones,
+            thisYearOnly = thisYearOnly,
+            history = history,
         )
     }
 

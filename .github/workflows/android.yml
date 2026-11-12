@@ -46,6 +46,10 @@ jobs:
             mkdir -p /tmp/dist/share-previews
             cp app/build/share-previews/*.png /tmp/dist/share-previews/
           fi
+          if [ -d app/build/screenshots ]; then
+            mkdir -p /tmp/dist/screenshots
+            cp app/build/screenshots/*.png /tmp/dist/screenshots/
+          fi
           cd /tmp/dist
           git init -b apk-dist
           git config user.email "github-actions[bot]@users.noreply.github.com"

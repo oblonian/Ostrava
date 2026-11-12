@@ -4,7 +4,10 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,23 +15,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.DirectionsRun
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material3.Button
-import androidx.compose.material3.Icon
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.ostrava.app.ui.components.EmojiBadge
+import com.ostrava.app.ui.theme.HeroGradient
 
 @Composable
 fun OnboardingScreen(onDone: () -> Unit) {
@@ -36,92 +37,86 @@ fun OnboardingScreen(onDone: () -> Unit) {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { onDone() }
 
+    OnboardingContent(
+        onStart = {
+            val permissions = buildList {
+                add(Manifest.permission.ACCESS_FINE_LOCATION)
+                add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    add(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+            permissionLauncher.launch(permissions.toTypedArray())
+        },
+    )
+}
+
+@Composable
+fun OnboardingContent(onStart: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+            .background(MaterialTheme.colorScheme.background)
+            .verticalScroll(rememberScrollState()),
     ) {
-        Text(
-            text = "Ostrava",
-            style = MaterialTheme.typography.displaySmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "Track every run, ride, walk and hike — your data stays on your phone.",
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(40.dp))
-
-        FeatureRow(
-            icon = Icons.AutoMirrored.Filled.DirectionsRun,
-            title = "Live GPS tracking",
-            body = "Route map, pace, splits, auto-pause and voice cues while you move.",
-        )
-        FeatureRow(
-            icon = Icons.Filled.BarChart,
-            title = "Training insights",
-            body = "Best efforts, personal records, streaks and weekly trends.",
-        )
-        FeatureRow(
-            icon = Icons.Filled.LocationOn,
-            title = "Location permission",
-            body = "Needed to record your route. Choose \"While using the app\" — a foreground service keeps recording with the screen off.",
-        )
-        FeatureRow(
-            icon = Icons.Filled.Notifications,
-            title = "Notifications",
-            body = "Shows live stats while recording so Android keeps the session alive.",
-        )
-
-        Spacer(Modifier.height(40.dp))
-        Button(
-            onClick = {
-                val permissions = buildList {
-                    add(Manifest.permission.ACCESS_FINE_LOCATION)
-                    add(Manifest.permission.ACCESS_COARSE_LOCATION)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        add(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                }
-                permissionLauncher.launch(permissions.toTypedArray())
-            },
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp),
+                .clip(RoundedCornerShape(bottomStart = 40.dp, bottomEnd = 40.dp))
+                .background(HeroGradient)
+                .padding(start = 28.dp, end = 28.dp, top = 72.dp, bottom = 40.dp),
         ) {
-            Text("Get started", fontWeight = FontWeight.Bold)
+            Column {
+                Text("👟", style = MaterialTheme.typography.displayMedium)
+                Spacer(Modifier.height(12.dp))
+                Text("Welcome to Ostrava", style = MaterialTheme.typography.headlineLarge, color = Color.White)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Track every run, ride, walk and hike. Your data stays on your phone.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White.copy(alpha = 0.9f),
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            Feature("🗺️", "Live tracking", "Route, pace and splits as you move, with voice cues so you can keep your eyes up.")
+            Feature("🏆", "Records and streaks", "Best efforts over every distance, weekly streaks and gentle, useful nudges.")
+            Feature("📍", "Location", "Needed to record your route. Recording carries on with the screen off.")
+            Feature("🔔", "Notifications", "Live stats while you record, and at most one reminder a day. You can turn reminders off any time.")
+
+            Spacer(Modifier.height(4.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(60.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(HeroGradient)
+                    .clickable(role = Role.Button, onClick = onStart),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("Let's go", style = MaterialTheme.typography.titleLarge, color = Color.White, fontWeight = FontWeight.ExtraBold)
+            }
+            Text(
+                "Next, Android will ask for location and notification access.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
         }
     }
 }
 
 @Composable
-private fun FeatureRow(icon: ImageVector, title: String, body: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(28.dp),
-        )
-        Spacer(Modifier.size(16.dp))
-        Column {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            Text(
-                body,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+private fun Feature(emoji: String, title: String, body: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        EmojiBadge(emoji, size = 48.dp)
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

@@ -1,0 +1,4 @@
+<resources>
+    <!-- Matches the Compose background so there is no flash while the app starts. -->
+    <color name="window_background">#FAF6F2</color>
+</resources>
