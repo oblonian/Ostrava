@@ -202,8 +202,12 @@ fun StatsContent(uiState: StatsUiState, actions: StatsActions) {
             BarChart(
                 entries = uiState.chartBuckets.mapIndexed { index, bucket ->
                     BarEntry(
-                        // Weekly labels would collide; show every third.
-                        label = if (uiState.chartPeriod == ChartPeriod.MONTHLY || index % 3 == 0) bucket.label else "",
+                        // Twelve labels would collide; show every third week or every other month.
+                        label = if (index % (if (uiState.chartPeriod == ChartPeriod.MONTHLY) 2 else 3) == 0) {
+                            bucket.label
+                        } else {
+                            ""
+                        },
                         value = bucket.distanceMeters.toFloat(),
                     )
                 },

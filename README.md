@@ -16,6 +16,14 @@ Both apps share the same feature set and data formats (GPX, JSON backup).
   displacement, elevation hysteresis)
 
 **Pro features**
+- **Crash-safe recording** — the activity in progress is saved as it is
+  recorded; after a crash or a killed app it can be resumed or saved
+- **Smoothed GPS** — fixes are Kalman-filtered and implausible jumps dropped
+- **Smart tips and reminders** — data-driven nudges on the home screen
+  (streak at risk, goal in reach, rest, near-miss records, backups) and at
+  most one reminder notification a day
+- **Trim, manual entry, partial segments** and **time in heart-rate zones**
+- **Health Connect** — optional sync of finished activities
 - **Auto-pause** — the clock stops when you stop, with per-sport thresholds
 - **Audio cues** — spoken split announcements (time + last-km pace) via TTS
 - **Interval workouts** — warmup / N×(work+rest) / cooldown with voice and
@@ -37,9 +45,10 @@ Both apps share the same feature set and data formats (GPX, JSON backup).
   training-load ramp warning, all-time totals, per-sport filtering
 - **Weekly distance goal** with progress tracking on the home feed
 - **Route thumbnails** on every feed card, drawn straight from the GPS track
-- **Share studio** — live-preview share cards in three styles (your own
-  photo as the background, route on a gradient, minimal), story / post /
-  square formats, selectable stats and a personal-record badge
+- **Share studio** — live-preview share cards in five styles (your own
+  photo with drag-and-pinch framing, a real map, route on a gradient,
+  minimal, transparent sticker), story / post / square formats, text at the
+  top or bottom, selectable stats and a personal-record badge
 - **GPX export & import**, plus full **JSON backup/restore** of all data
 - **Calorie estimation** (MET-based, using your weight)
 - **Heart rate zones** computed from your max HR
@@ -97,7 +106,13 @@ Requires JDK 17+ and the Android SDK (compileSdk 35).
 ```
 
 CI builds a debug APK on every push — grab it from the workflow run's
-artifacts or the `apk-dist` branch.
+artifacts or the `apk-dist` branch, which also holds rendered screenshots
+of every screen and share card. All builds are signed with the committed
+sideload key (`app/sideload.keystore`) so they install over one another;
+use your own private key for a Play Store release.
+
+The iOS app has not yet received the changes from Android 1.3 (crash-safe
+recording, tips and reminders, the redesign).
 
 ## Permissions
 

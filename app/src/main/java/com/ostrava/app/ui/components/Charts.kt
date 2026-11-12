@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -104,11 +105,15 @@ fun BarChart(
                     )
                 }
                 Spacer(Modifier.height(4.dp))
+                // Labels may be wider than their bar; let them spill over the neighbours'
+                // (callers leave gaps between labels) instead of being cut off.
                 Text(
                     text = entry.label,
                     style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
-                    overflow = TextOverflow.Clip,
+                    softWrap = false,
+                    modifier = Modifier.wrapContentWidth(unbounded = true),
                 )
             }
         }
