@@ -12,14 +12,13 @@ struct DetailView: View {
 
     @State private var points: [TrackPoint] = []
     @State private var splits: [Split] = []
-    @State private var bestEfforts: [BestEffortResult] = []
+    @State private var rankedEfforts: [RankedEffort] = []
     @State private var efforts: [(name: String, duration: TimeInterval, isBest: Bool)] = []
     @State private var showDeleteAlert = false
     @State private var showRenameAlert = false
     @State private var showSegmentAlert = false
     @State private var renameText = ""
     @State private var segmentName = ""
-    @State private var shareImageURL: URL?
     @State private var gpxURL: URL?
 
     var body: some View {
@@ -37,9 +36,10 @@ struct DetailView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     header
                     actions
+                    if rankedEfforts.contains(where: { $0.rank == 1 }) { recordBanner }
                     statGrid
                     if !efforts.isEmpty { segmentEffortsCard }
-                    if !bestEfforts.isEmpty { bestEffortsCard }
+                    if !rankedEfforts.isEmpty { bestEffortsCard }
                     if !splits.isEmpty { splitsCard }
                     if points.count >= 2 { charts }
                 }
@@ -92,12 +92,12 @@ struct DetailView: View {
     private var actions: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                if let url = shareImageURL {
-                    ShareLink(item: url) {
-                        Label("Share image", systemImage: "square.and.arrow.up")
-                    }
-                    .buttonStyle(.bordered)
+                NavigationLink {
+                    ShareStudioView(activity: activity)
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
                 }
+                .buttonStyle(.borderedProminent)
                 if let url = gpxURL {
                     ShareLink(item: url) {
                         Label("GPX", systemImage: "doc.text")
@@ -183,16 +183,43 @@ struct DetailView: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
+    private var recordBanner: some View {
+        let records = rankedEfforts.filter { $0.rank == 1 }
+        return HStack(spacing: 12) {
+            Text("🏆").font(.largeTitle)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(records.count == 1 ? "Personal record" : "\(records.count) personal records")
+                    .font(.headline)
+                Text("Your fastest \(records.map(\.label).joined(separator: ", "))")
+                    .font(.subheadline)
+            }
+            Spacer()
+        }
+        .padding()
+        .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     private var bestEffortsCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Best efforts").font(.headline)
-            ForEach(bestEfforts) { effort in
+            ForEach(rankedEfforts) { effort in
+                let speed = effort.distance / effort.duration
                 HStack {
-                    Text(effort.label)
+                    Text(medal(for: effort.rank)).frame(width: 28, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(effort.label)
+                        if let rankLabel = rankLabel(for: effort.rank) {
+                            Text(rankLabel).font(.caption).foregroundStyle(.tint)
+                        }
+                    }
                     Spacer()
                     Text(formatDuration(effort.duration)).bold()
-                    Text(formatPace(speedMps: effort.distance / effort.duration, imperial: imperial))
-                        .foregroundStyle(.secondary)
+                    Text(
+                        activity.type.usesPace
+                            ? formatPace(speedMps: speed, imperial: imperial)
+                            : formatSpeed(speed, imperial: imperial)
+                    )
+                    .foregroundStyle(.secondary)
                 }
                 .font(.subheadline)
             }
@@ -200,6 +227,24 @@ struct DetailView: View {
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func medal(for rank: Int) -> String {
+        switch rank {
+        case 1: return "🥇"
+        case 2: return "🥈"
+        case 3: return "🥉"
+        default: return ""
+        }
+    }
+
+    private func rankLabel(for rank: Int) -> String? {
+        switch rank {
+        case 1: return "Personal record"
+        case 2: return "2nd fastest ever"
+        case 3: return "3rd fastest ever"
+        default: return nil
+        }
     }
 
     private var splitsCard: some View {
@@ -260,15 +305,14 @@ struct DetailView: View {
         let trackPoints = activity.points
         points = trackPoints
         splits = computeSplits(points: trackPoints, splitLength: imperial ? metersPerMile : 1000)
-        bestEfforts = bestEffortsFor(type: activity.type, points: trackPoints)
+        rankedEfforts = PersonalRecords.rankedEfforts(for: activity, in: context)
         loadEfforts()
         regenerateExports()
     }
 
-    /// Rendering the share image and writing the GPX are too expensive for `body`,
-    /// so they run once here (and again after a rename changes the title).
+    /// Writing the GPX is too expensive for `body`, so it runs once here
+    /// (and again after a rename changes the title).
     private func regenerateExports() {
-        shareImageURL = ShareImage.renderURL(activity: activity, imperial: imperial)
         gpxURL = GpxExporter.exportURL(activity: activity)
     }
 
@@ -328,6 +372,7 @@ struct DetailView: View {
         for effort in (try? context.fetch(descriptor)) ?? [] {
             context.delete(effort)
         }
+        PersonalRecords.deleteEfforts(forActivity: activityUid, in: context)
         context.delete(activity)
         try? context.save()
     }

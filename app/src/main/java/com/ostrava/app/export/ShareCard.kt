@@ -80,6 +80,7 @@ object ShareCardRenderer {
 
     private const val MARGIN = 72f
     private const val ROW_HEIGHT = 164f
+    private const val MIN_ROUTE_SIZE = 120f
     private val ORANGE = 0xFFFC5200.toInt()
     private val NAVY = 0xFF1B2733.toInt()
     private val PAPER = 0xFFF6F3EE.toInt()
@@ -142,11 +143,17 @@ object ShareCardRenderer {
 
         drawBrand(canvas, palette)
         var contentTop = MARGIN + 70f
+        val wantsRoute = spec.showRoute && content.points.size >= 2
         if (hero != null) {
-            contentTop = drawHero(canvas, hero, width, contentTop, palette)
+            val heroHeight = heroHeight(hero, width, palette)
+            val roomForRoute = textTop - 64f - (contentTop + heroHeight + 24f)
+            // With no route below it, the hero number sits in the middle of the free space.
+            val top = if (wantsRoute && roomForRoute >= MIN_ROUTE_SIZE) contentTop
+            else contentTop + ((textTop - contentTop - heroHeight) / 2f - 20f).coerceAtLeast(0f)
+            contentTop = drawHero(canvas, hero, width, top, palette)
         }
 
-        if (spec.showRoute && content.points.size >= 2) {
+        if (wantsRoute) {
             val rect = if (usePhoto) {
                 // Over a photo the route is a small overlay so it doesn't fight the picture.
                 val size = min(width * 0.36f, textTop - contentTop - 40f)
@@ -154,7 +161,7 @@ object ShareCardRenderer {
             } else {
                 RectF(MARGIN + 24f, contentTop + 24f, width - MARGIN - 24f, textTop - 64f)
             }
-            if (rect.width() >= 120f && rect.height() >= 120f) {
+            if (rect.width() >= MIN_ROUTE_SIZE && rect.height() >= MIN_ROUTE_SIZE) {
                 drawRoute(canvas, content.points, rect, palette, thin = usePhoto)
             }
         }
@@ -204,12 +211,18 @@ object ShareCardRenderer {
         canvas.drawText("OSTRAVA", MARGIN, MARGIN + 30f, paint)
     }
 
+    private fun heroPaint(hero: ShareStatValue, width: Float, palette: Palette): TextPaint =
+        textPaint(210f, palette.text, bold = true, shadow = false).apply {
+            textAlign = Paint.Align.CENTER
+            fitText(this, hero.value, width - 2 * MARGIN)
+        }
+
+    private fun heroHeight(hero: ShareStatValue, width: Float, palette: Palette): Float =
+        40f + heroPaint(hero, width, palette).textSize * 0.82f + 80f
+
     /** Minimal template: one oversized number. Returns the y below it. */
     private fun drawHero(canvas: Canvas, hero: ShareStatValue, width: Float, top: Float, palette: Palette): Float {
-        val valuePaint = textPaint(210f, palette.text, bold = true, shadow = false).apply {
-            textAlign = Paint.Align.CENTER
-        }
-        fitText(valuePaint, hero.value, width - 2 * MARGIN)
+        val valuePaint = heroPaint(hero, width, palette)
         val baseline = top + 40f + valuePaint.textSize * 0.82f
         canvas.drawText(hero.value, width / 2f, baseline, valuePaint)
 
@@ -252,9 +265,7 @@ object ShareCardRenderer {
             stats.forEachIndexed { index, stat ->
                 val x = MARGIN + (index % columns) * cellWidth
                 val y = gridTop + (index / columns) * ROW_HEIGHT
-                val valuePaint = textPaint(78f, palette.text, bold = true, shadow = palette.shadow)
-                fitText(valuePaint, stat.value, cellWidth - 24f)
-                canvas.drawText(stat.value, x, y + 78f, valuePaint)
+                drawStatValue(canvas, stat.value, x, y + 78f, cellWidth - 36f, palette)
                 canvas.drawText(stat.label.uppercase(), x, y + 122f, labelPaint)
             }
         }
@@ -298,6 +309,31 @@ object ShareCardRenderer {
             top = rect.top
         }
         return top
+    }
+
+    /** Draws "10.42 km" as a large number with a smaller unit so columns don't crowd each other. */
+    private fun drawStatValue(
+        canvas: Canvas,
+        text: String,
+        x: Float,
+        baseline: Float,
+        maxWidth: Float,
+        palette: Palette,
+    ) {
+        val split = text.indexOf(' ')
+        val number = if (split > 0) text.substring(0, split) else text
+        val unit = if (split > 0) text.substring(split + 1) else ""
+        val numberPaint = textPaint(78f, palette.text, bold = true, shadow = palette.shadow)
+        val unitPaint = textPaint(40f, palette.text, bold = true, shadow = palette.shadow)
+        val gap = if (unit.isEmpty()) 0f else 12f
+        val total = numberPaint.measureText(number) + gap + unitPaint.measureText(unit)
+        val shrink = if (total > maxWidth && total > 0f) maxWidth / total else 1f
+        numberPaint.textSize *= shrink
+        unitPaint.textSize *= shrink
+        canvas.drawText(number, x, baseline, numberPaint)
+        if (unit.isNotEmpty()) {
+            canvas.drawText(unit, x + numberPaint.measureText(number) + gap * shrink, baseline, unitPaint)
+        }
     }
 
     private fun drawRoute(canvas: Canvas, points: List<TrackPoint>, bounds: RectF, palette: Palette, thin: Boolean) {

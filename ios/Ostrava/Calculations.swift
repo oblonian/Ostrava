@@ -118,11 +118,14 @@ func bestEffortsFor(type: ActivityType, points: [TrackPoint]) -> [BestEffortResu
     let targets: [(String, Double)]
     switch type {
     case .run:
-        targets = [("1 km", 1000), ("5 km", 5000), ("10 km", 10000), ("Half marathon", 21097.5)]
+        targets = [
+            ("400 m", 400), ("1 km", 1000), ("1 mile", 1609.344), ("5 km", 5000),
+            ("10 km", 10000), ("Half marathon", 21097.5), ("Marathon", 42195),
+        ]
     case .ride:
-        targets = [("5 km", 5000), ("20 km", 20000), ("40 km", 40000)]
+        targets = [("5 km", 5000), ("10 km", 10000), ("20 km", 20000), ("40 km", 40000), ("100 km", 100000)]
     default:
-        targets = [("1 km", 1000), ("5 km", 5000)]
+        targets = [("1 km", 1000), ("5 km", 5000), ("10 km", 10000)]
     }
     return targets.compactMap { bestEffort(points: points, target: $0.1, label: $0.0) }
 }

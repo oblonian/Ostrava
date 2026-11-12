@@ -26,15 +26,20 @@ Both apps share the same feature set and data formats (GPX, JSON backup).
   are timed automatically and ranked against your best
 - **Splits** — per-km (or per-mile) splits with linear interpolation at split
   boundaries and pace bars
-- **Best efforts** — fastest 1k / 5k / 10k / half marathon (runs) or
-  5k / 20k / 40k (rides) found with a sliding-window sweep
-- **Personal records** — longest distance, longest duration, biggest climb,
-  fastest average
+- **Best efforts** — fastest 400 m / 1 km / 1 mile / 5k / 10k / half / full
+  marathon (runs) or 5k–100k (rides), found with a sliding-window sweep and
+  cached per activity
+- **Personal records** — all-time best efforts per sport with gold/silver/
+  bronze ranks on each activity, improvement over your previous best and
+  NEW badges, plus milestones (longest, most climbing, fastest average, top
+  speed, biggest week and month)
 - **Training analytics** — weekly/monthly distance charts, streaks,
   training-load ramp warning, all-time totals, per-sport filtering
 - **Weekly distance goal** with progress tracking on the home feed
 - **Route thumbnails** on every feed card, drawn straight from the GPS track
-- **Share image** — rendered summary card (route + stats) for social media
+- **Share studio** — live-preview share cards in three styles (your own
+  photo as the background, route on a gradient, minimal), story / post /
+  square formats, selectable stats and a personal-record badge
 - **GPX export & import**, plus full **JSON backup/restore** of all data
 - **Calorie estimation** (MET-based, using your weight)
 - **Heart rate zones** computed from your max HR

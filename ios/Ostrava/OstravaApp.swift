@@ -9,7 +9,7 @@ struct OstravaApp: App {
     init() {
         do {
             container = try ModelContainer(
-                for: Activity.self, Segment.self, SegmentEffort.self
+                for: Activity.self, Segment.self, SegmentEffort.self, BestEffortRecord.self
             )
         } catch {
             fatalError("Failed to create model container: \(error)")

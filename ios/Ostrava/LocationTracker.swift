@@ -167,6 +167,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             let context = container.mainContext
             context.insert(activity)
             recordSegmentEfforts(for: activity, in: context)
+            PersonalRecords.storeEfforts(for: activity, in: context)
             try? context.save()
         }
         vibrate(.success)

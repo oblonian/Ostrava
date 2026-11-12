@@ -180,6 +180,7 @@ enum BackupManager {
             )
             context.insert(activity)
             recordEfforts(for: activity, segments: segments, context: context)
+            PersonalRecords.storeEfforts(for: activity, in: context)
             imported += 1
         }
         try? context.save()
@@ -224,6 +225,7 @@ enum BackupManager {
         context.insert(activity)
         let segments = (try? context.fetch(FetchDescriptor<Segment>())) ?? []
         recordEfforts(for: activity, segments: segments, context: context)
+        PersonalRecords.storeEfforts(for: activity, in: context)
         try? context.save()
         return true
     }

@@ -57,6 +57,8 @@ final class Activity {
     var avgHeartRate: Int?
     var maxHeartRate: Int?
     var feel: String?
+    /// Nil until best efforts have been computed for this activity.
+    var effortsVersion: Int?
     @Attribute(.externalStorage) var pointsData: Data = Data()
 
     init(
@@ -147,6 +149,35 @@ final class SegmentEffort {
         self.activityUid = activityUid
         self.duration = duration
         self.startTime = startTime
+    }
+}
+
+/// Cached fastest time over a benchmark distance within one activity (drives all-time PRs).
+@Model
+final class BestEffortRecord {
+    var uid: UUID = UUID()
+    var activityUid: UUID = UUID()
+    var activityTypeRaw: String = ActivityType.run.rawValue
+    var label: String = ""
+    var distance: Double = 0
+    var duration: TimeInterval = 0
+    var achievedAt: Date = Date.distantPast
+
+    init(
+        activityUid: UUID,
+        activityType: ActivityType,
+        label: String,
+        distance: Double,
+        duration: TimeInterval,
+        achievedAt: Date
+    ) {
+        self.uid = UUID()
+        self.activityUid = activityUid
+        self.activityTypeRaw = activityType.rawValue
+        self.label = label
+        self.distance = distance
+        self.duration = duration
+        self.achievedAt = achievedAt
     }
 }
 

@@ -2,8 +2,16 @@ import SwiftUI
 
 struct RootView: View {
     @AppStorage(SettingsKeys.onboardingDone) private var onboardingDone = false
+    @Environment(\.modelContext) private var context
 
     var body: some View {
+        content
+            // Activities recorded before personal records were cached get their efforts computed once.
+            .task { PersonalRecords.backfill(context: context) }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if onboardingDone {
             TabView {
                 FeedView()
