@@ -22,6 +22,8 @@ data class ActivityEntity(
     val avgHeartRate: Int? = null,
     val maxHeartRate: Int? = null,
     val feel: String? = null,
+    // v3: null until best efforts have been computed for this activity.
+    val effortsVersion: Int? = null,
 )
 
 @Entity(
@@ -84,4 +86,27 @@ data class SegmentEffortEntity(
     val activityId: Long,
     val durationMillis: Long,
     val startTime: Long,
+)
+
+/** Cached fastest time over a benchmark distance within one activity (drives all-time PRs). */
+@Entity(
+    tableName = "best_efforts",
+    foreignKeys = [
+        ForeignKey(
+            entity = ActivityEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["activityId"],
+            onDelete = ForeignKey.CASCADE,
+        )
+    ],
+    indices = [Index("activityId")],
+)
+data class BestEffortEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val activityId: Long,
+    val activityType: String,
+    val label: String,
+    val distanceMeters: Double,
+    val durationMillis: Long,
+    val achievedAt: Long,
 )

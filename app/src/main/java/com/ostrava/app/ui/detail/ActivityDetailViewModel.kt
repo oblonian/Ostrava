@@ -8,16 +8,13 @@ import com.ostrava.app.data.ActivityRepository
 import com.ostrava.app.data.SettingsRepository
 import com.ostrava.app.data.db.ActivityEntity
 import com.ostrava.app.data.db.EffortForActivity
-import com.ostrava.app.domain.ActivityType
-import com.ostrava.app.domain.BestEffort
+import com.ostrava.app.data.db.RankedEffort
 import com.ostrava.app.domain.METERS_PER_MILE
 import com.ostrava.app.domain.Split
 import com.ostrava.app.domain.TrackPoint
 import com.ostrava.app.domain.UserSettings
-import com.ostrava.app.domain.bestEffortsFor
 import com.ostrava.app.domain.computeSplits
 import com.ostrava.app.export.GpxExporter
-import com.ostrava.app.export.ShareImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -33,7 +30,6 @@ data class DetailUiState(
     val activity: ActivityEntity? = null,
     val points: List<TrackPoint> = emptyList(),
     val splits: List<Split> = emptyList(),
-    val bestEfforts: List<BestEffort> = emptyList(),
     val elevationProfile: List<Float> = emptyList(),
     val speedProfile: List<Float> = emptyList(),
     val settings: UserSettings = UserSettings(),
@@ -55,7 +51,15 @@ class ActivityDetailViewModel(
         repository.observeEffortsForActivity(activityId)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** This activity's best efforts with their all-time rank (1 = personal record). */
+    val rankedEfforts: StateFlow<List<RankedEffort>> =
+        repository.observeRankedEfforts(activityId)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     init {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { repository.ensureBestEfforts(activityId) }
+        }
         combine(
             repository.observeActivity(activityId),
             settingsRepository.settings,
@@ -85,11 +89,9 @@ class ActivityDetailViewModel(
     }
 
     private fun analyse(activity: ActivityEntity, points: List<TrackPoint>, settings: UserSettings): DetailUiState {
-        val type = ActivityType.fromName(activity.type)
         val splitLength = if (settings.imperialUnits) METERS_PER_MILE else 1000.0
         return DetailUiState(
             splits = computeSplits(points, splitLength),
-            bestEfforts = bestEffortsFor(type, points),
             elevationProfile = downsample(points.map { it.altitude.toFloat() }),
             speedProfile = downsample(smooth(points.map { it.speedMps })),
         )
@@ -129,14 +131,6 @@ class ActivityDetailViewModel(
         val activity = state.activity ?: return
         viewModelScope.launch(Dispatchers.IO) {
             GpxExporter.shareGpx(context, activity, state.points)
-        }
-    }
-
-    fun shareImage(context: Context) {
-        val state = _uiState.value
-        val activity = state.activity ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            ShareImage.share(context, activity, state.points, state.settings.imperialUnits)
         }
     }
 

@@ -2,12 +2,17 @@ package com.ostrava.app.data
 
 import com.ostrava.app.data.db.ActivityDao
 import com.ostrava.app.data.db.ActivityEntity
+import com.ostrava.app.data.db.BestEffortEntity
 import com.ostrava.app.data.db.EffortForActivity
+import com.ostrava.app.data.db.EffortWithActivity
+import com.ostrava.app.data.db.RankedEffort
 import com.ostrava.app.data.db.SegmentEffortEntity
 import com.ostrava.app.data.db.SegmentEntity
 import com.ostrava.app.data.db.SegmentWithStats
 import com.ostrava.app.data.db.TrackPointEntity
+import com.ostrava.app.domain.ActivityType
 import com.ostrava.app.domain.TrackPoint
+import com.ostrava.app.domain.bestEffortsFor
 import com.ostrava.app.domain.matchSegment
 import kotlinx.coroutines.flow.Flow
 
@@ -55,8 +60,44 @@ class ActivityRepository(private val dao: ActivityDao) {
                 )
             }
         }
+        storeBestEfforts(activity.copy(id = id), points)
         return id
     }
+
+    // Best efforts (personal records)
+
+    private suspend fun storeBestEfforts(activity: ActivityEntity, points: List<TrackPoint>) {
+        val efforts = bestEffortsFor(ActivityType.fromName(activity.type), points).map {
+            BestEffortEntity(
+                activityId = activity.id,
+                activityType = activity.type,
+                label = it.label,
+                distanceMeters = it.distanceMeters,
+                durationMillis = it.durationMillis,
+                achievedAt = activity.startTime,
+            )
+        }
+        dao.replaceBestEfforts(activity.id, EFFORTS_VERSION, efforts)
+    }
+
+    /** Computes cached best efforts for activities recorded before the cache existed. */
+    suspend fun backfillBestEfforts() {
+        dao.getActivitiesNeedingEfforts(EFFORTS_VERSION).forEach { activity ->
+            storeBestEfforts(activity, getTrackPoints(activity.id))
+        }
+    }
+
+    suspend fun ensureBestEfforts(activityId: Long) {
+        val activity = dao.getActivity(activityId) ?: return
+        if ((activity.effortsVersion ?: 0) < EFFORTS_VERSION) {
+            storeBestEfforts(activity, getTrackPoints(activityId))
+        }
+    }
+
+    fun observeRankedEfforts(activityId: Long): Flow<List<RankedEffort>> =
+        dao.observeRankedEfforts(activityId)
+
+    fun observeAllBestEfforts(): Flow<List<EffortWithActivity>> = dao.observeAllBestEfforts()
 
     suspend fun deleteActivity(id: Long) = dao.deleteActivity(id)
 
@@ -115,4 +156,9 @@ class ActivityRepository(private val dao: ActivityDao) {
         speedMps = speedMps,
         segment = segment,
     )
+
+    companion object {
+        /** Bump when the benchmark distances change so cached efforts are recomputed. */
+        const val EFFORTS_VERSION = 1
+    }
 }

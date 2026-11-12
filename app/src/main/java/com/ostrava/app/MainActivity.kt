@@ -37,6 +37,7 @@ import com.ostrava.app.ui.feed.FeedScreen
 import com.ostrava.app.ui.onboarding.OnboardingScreen
 import com.ostrava.app.ui.profile.ProfileScreen
 import com.ostrava.app.ui.record.RecordScreen
+import com.ostrava.app.ui.share.ShareScreen
 import com.ostrava.app.ui.stats.StatsScreen
 import com.ostrava.app.ui.theme.OstravaTheme
 
@@ -46,8 +47,11 @@ object Routes {
     const val STATS = "stats"
     const val PROFILE = "profile"
     const val ACTIVITY_DETAIL = "activity/{activityId}"
+    const val SHARE = "share/{activityId}"
 
     fun activityDetail(id: Long) = "activity/$id"
+
+    fun share(id: Long) = "share/$id"
 }
 
 private data class BottomNavItem(
@@ -150,7 +154,9 @@ private fun OstravaNavHost(navController: NavHostController, modifier: Modifier 
             )
         }
         composable(Routes.STATS) {
-            StatsScreen()
+            StatsScreen(
+                onActivityClick = { id -> navController.navigate(Routes.activityDetail(id)) },
+            )
         }
         composable(Routes.PROFILE) {
             ProfileScreen()
@@ -159,7 +165,16 @@ private fun OstravaNavHost(navController: NavHostController, modifier: Modifier 
             route = Routes.ACTIVITY_DETAIL,
             arguments = listOf(navArgument("activityId") { type = NavType.LongType }),
         ) {
-            ActivityDetailScreen(onDeleted = { navController.popBackStack() })
+            ActivityDetailScreen(
+                onDeleted = { navController.popBackStack() },
+                onShare = { id -> navController.navigate(Routes.share(id)) },
+            )
+        }
+        composable(
+            route = Routes.SHARE,
+            arguments = listOf(navArgument("activityId") { type = NavType.LongType }),
+        ) {
+            ShareScreen(onBack = { navController.popBackStack() })
         }
     }
 }

@@ -5,12 +5,15 @@ import androidx.lifecycle.viewModelScope
 import com.ostrava.app.data.ActivityRepository
 import com.ostrava.app.data.SettingsRepository
 import com.ostrava.app.data.db.ActivityEntity
+import com.ostrava.app.data.db.EffortWithActivity
 import com.ostrava.app.data.db.SegmentWithStats
 import com.ostrava.app.domain.ActivityType
 import com.ostrava.app.domain.UserSettings
+import com.ostrava.app.domain.formatDate
 import com.ostrava.app.domain.formatDistance
 import com.ostrava.app.domain.formatDuration
 import com.ostrava.app.domain.formatElevation
+import com.ostrava.app.domain.formatPace
 import com.ostrava.app.domain.formatSpeed
 import com.ostrava.app.domain.weeklyStreaks
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,11 +37,34 @@ data class ChartBucket(
     val distanceMeters: Double,
 )
 
-data class PersonalRecord(
+/** All-time fastest effort over a benchmark distance for one sport. */
+data class EffortRecord(
+    val label: String,
+    val distanceMeters: Double,
+    val durationMillis: Long,
+    val activityId: Long,
+    val activityTitle: String,
+    val achievedAt: Long,
+    /** How much faster than the best effort before it; null for a first-ever effort. */
+    val improvementMillis: Long?,
+    val attempts: Int,
+    val isRecent: Boolean,
+)
+
+/** A non-timed record: longest, highest, biggest week and so on. */
+data class MilestoneRecord(
     val label: String,
     val value: String,
-    val activityTitle: String,
-    val activityId: Long,
+    val detail: String,
+    val activityId: Long?,
+    val isRecent: Boolean,
+)
+
+data class RecordsUiState(
+    val sport: ActivityType? = null,
+    val availableSports: List<ActivityType> = emptyList(),
+    val efforts: List<EffortRecord> = emptyList(),
+    val milestones: List<MilestoneRecord> = emptyList(),
 )
 
 data class TrainingLoad(
@@ -55,7 +81,7 @@ data class StatsUiState(
     val totalMovingTimeMillis: Long = 0L,
     val totalElevationMeters: Double = 0.0,
     val chartBuckets: List<ChartBucket> = emptyList(),
-    val records: List<PersonalRecord> = emptyList(),
+    val records: RecordsUiState = RecordsUiState(),
     val currentStreakWeeks: Int = 0,
     val longestStreakWeeks: Int = 0,
     val trainingLoad: TrainingLoad? = null,
@@ -71,8 +97,11 @@ class StatsViewModel(
 
     private val typeFilter = MutableStateFlow<ActivityType?>(null)
     private val chartPeriod = MutableStateFlow(ChartPeriod.WEEKLY)
+    private val recordsSport = MutableStateFlow<ActivityType?>(null)
 
-    val uiState: StateFlow<StatsUiState> = combine(
+    private class Base(val state: StatsUiState, val allActivities: List<ActivityEntity>)
+
+    private val base = combine(
         repository.observeActivities(),
         settingsRepository.settings,
         typeFilter,
@@ -82,29 +111,52 @@ class StatsViewModel(
         val activities = if (filter == null) allActivities
         else allActivities.filter { it.type == filter.name }
         val (currentStreak, longestStreak) = computeStreaks(allActivities)
-        StatsUiState(
-            typeFilter = filter,
-            chartPeriod = period,
-            totalCount = activities.size,
-            totalDistanceMeters = activities.sumOf { it.distanceMeters },
-            totalMovingTimeMillis = activities.sumOf { it.movingTimeMillis },
-            totalElevationMeters = activities.sumOf { it.elevationGainMeters },
-            chartBuckets = when (period) {
-                ChartPeriod.WEEKLY -> weeklyBuckets(activities)
-                ChartPeriod.MONTHLY -> monthlyBuckets(activities)
-            },
-            records = computeRecords(activities, settings),
-            currentStreakWeeks = currentStreak,
-            longestStreakWeeks = longestStreak,
-            trainingLoad = computeTrainingLoad(allActivities),
-            segments = segments,
-            settings = settings,
-            loading = false,
+        Base(
+            state = StatsUiState(
+                typeFilter = filter,
+                chartPeriod = period,
+                totalCount = activities.size,
+                totalDistanceMeters = activities.sumOf { it.distanceMeters },
+                totalMovingTimeMillis = activities.sumOf { it.movingTimeMillis },
+                totalElevationMeters = activities.sumOf { it.elevationGainMeters },
+                chartBuckets = when (period) {
+                    ChartPeriod.WEEKLY -> weeklyBuckets(activities)
+                    ChartPeriod.MONTHLY -> monthlyBuckets(activities)
+                },
+                currentStreakWeeks = currentStreak,
+                longestStreakWeeks = longestStreak,
+                trainingLoad = computeTrainingLoad(allActivities),
+                segments = segments,
+                settings = settings,
+                loading = false,
+            ),
+            allActivities = allActivities,
+        )
+    }
+
+    val uiState: StateFlow<StatsUiState> = combine(
+        base,
+        repository.observeAllBestEfforts(),
+        recordsSport,
+    ) { base, efforts, chosenSport ->
+        base.state.copy(
+            records = buildRecords(
+                allActivities = base.allActivities,
+                efforts = efforts,
+                chosenSport = chosenSport ?: base.state.typeFilter,
+                imperial = base.state.settings.imperialUnits,
+            ),
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StatsUiState())
 
     fun setTypeFilter(type: ActivityType?) {
         typeFilter.value = type
+        // The records card follows the page filter until a sport is picked on the card itself.
+        recordsSport.value = null
+    }
+
+    fun setRecordsSport(type: ActivityType) {
+        recordsSport.value = type
     }
 
     fun setChartPeriod(period: ChartPeriod) {
@@ -177,43 +229,129 @@ class StatsViewModel(
         }
     }
 
-    private fun computeRecords(activities: List<ActivityEntity>, settings: UserSettings): List<PersonalRecord> {
-        if (activities.isEmpty()) return emptyList()
-        val records = mutableListOf<PersonalRecord>()
+    private fun buildRecords(
+        allActivities: List<ActivityEntity>,
+        efforts: List<EffortWithActivity>,
+        chosenSport: ActivityType?,
+        imperial: Boolean,
+    ): RecordsUiState {
+        if (allActivities.isEmpty()) return RecordsUiState()
+        val countBySport = allActivities.groupingBy { it.type }.eachCount()
+        val availableSports = ActivityType.entries.filter { (countBySport[it.name] ?: 0) > 0 }
+        // Default to the sport the athlete does most.
+        val sport = chosenSport?.takeIf { it in availableSports }
+            ?: availableSports.maxByOrNull { countBySport[it.name] ?: 0 }
+            ?: return RecordsUiState()
 
-        activities.maxByOrNull { it.distanceMeters }?.let {
-            records += PersonalRecord(
-                label = "Longest distance",
-                value = formatDistance(it.distanceMeters, settings.imperialUnits),
-                activityTitle = it.title,
-                activityId = it.id,
-            )
+        val now = System.currentTimeMillis()
+        fun recent(time: Long) = now - time < RECENT_WINDOW_MILLIS
+
+        val effortRecords = efforts
+            .filter { it.activityType == sport.name }
+            .groupBy { it.label }
+            .values
+            .mapNotNull { sameDistance ->
+                val best = sameDistance.minByOrNull { it.durationMillis } ?: return@mapNotNull null
+                val previousBest = sameDistance
+                    .filter { it.achievedAt < best.achievedAt }
+                    .minOfOrNull { it.durationMillis }
+                EffortRecord(
+                    label = best.label,
+                    distanceMeters = best.distanceMeters,
+                    durationMillis = best.durationMillis,
+                    activityId = best.activityId,
+                    activityTitle = best.activityTitle,
+                    achievedAt = best.achievedAt,
+                    improvementMillis = previousBest?.let { it - best.durationMillis },
+                    attempts = sameDistance.size,
+                    isRecent = recent(best.achievedAt),
+                )
+            }
+            .sortedBy { it.distanceMeters }
+
+        val activities = allActivities.filter { it.type == sport.name }
+        val milestones = buildList {
+            fun fromActivity(label: String, activity: ActivityEntity?, value: (ActivityEntity) -> String) {
+                if (activity == null) return
+                add(
+                    MilestoneRecord(
+                        label = label,
+                        value = value(activity),
+                        detail = "${activity.title} · ${formatDate(activity.startTime)}",
+                        activityId = activity.id,
+                        isRecent = recent(activity.startTime),
+                    )
+                )
+            }
+            fromActivity("Longest distance", activities.maxByOrNull { it.distanceMeters }) {
+                formatDistance(it.distanceMeters, imperial)
+            }
+            fromActivity("Longest duration", activities.maxByOrNull { it.movingTimeMillis }) {
+                formatDuration(it.movingTimeMillis)
+            }
+            fromActivity(
+                "Most climbing",
+                activities.filter { it.elevationGainMeters >= 1.0 }.maxByOrNull { it.elevationGainMeters },
+            ) { formatElevation(it.elevationGainMeters, imperial) }
+            // Fastest average over a meaningful distance (>= 1 km) so short blips don't win.
+            fromActivity(
+                if (sport.usesPace) "Fastest average pace" else "Fastest average speed",
+                activities.filter { it.distanceMeters >= 1000 }.maxByOrNull { it.avgSpeedMps },
+            ) {
+                if (sport.usesPace) formatPace(it.avgSpeedMps, imperial)
+                else formatSpeed(it.avgSpeedMps, imperial)
+            }
+            fromActivity(
+                "Top speed",
+                activities.filter { it.maxSpeedMps > 0 }.maxByOrNull { it.maxSpeedMps },
+            ) { formatSpeed(it.maxSpeedMps, imperial) }
+
+            val zone = ZoneId.systemDefault()
+            fun dateOf(activity: ActivityEntity): LocalDate =
+                Instant.ofEpochMilli(activity.startTime).atZone(zone).toLocalDate()
+
+            activities.groupBy { dateOf(it).with(DayOfWeek.MONDAY) }
+                .maxByOrNull { (_, week) -> week.sumOf { it.distanceMeters } }
+                ?.let { (weekStart, week) ->
+                    add(
+                        MilestoneRecord(
+                            label = "Biggest week",
+                            value = formatDistance(week.sumOf { it.distanceMeters }, imperial),
+                            detail = "Week of ${weekStart.format(WEEK_FORMAT)} · " +
+                                "${week.size} activit${if (week.size == 1) "y" else "ies"}",
+                            activityId = null,
+                            isRecent = weekStart == LocalDate.now().with(DayOfWeek.MONDAY),
+                        )
+                    )
+                }
+            activities.groupBy { YearMonth.from(dateOf(it)) }
+                .maxByOrNull { (_, month) -> month.sumOf { it.distanceMeters } }
+                ?.let { (yearMonth, month) ->
+                    add(
+                        MilestoneRecord(
+                            label = "Biggest month",
+                            value = formatDistance(month.sumOf { it.distanceMeters }, imperial),
+                            detail = "${yearMonth.format(MONTH_FORMAT)} · " +
+                                "${month.size} activit${if (month.size == 1) "y" else "ies"}",
+                            activityId = null,
+                            isRecent = yearMonth == YearMonth.now(),
+                        )
+                    )
+                }
         }
-        activities.maxByOrNull { it.movingTimeMillis }?.let {
-            records += PersonalRecord(
-                label = "Longest duration",
-                value = formatDuration(it.movingTimeMillis),
-                activityTitle = it.title,
-                activityId = it.id,
-            )
-        }
-        activities.maxByOrNull { it.elevationGainMeters }?.let {
-            records += PersonalRecord(
-                label = "Biggest climb",
-                value = formatElevation(it.elevationGainMeters, settings.imperialUnits),
-                activityTitle = it.title,
-                activityId = it.id,
-            )
-        }
-        // Fastest average over a meaningful distance (>= 1 km) so short blips don't win.
-        activities.filter { it.distanceMeters >= 1000 }.maxByOrNull { it.avgSpeedMps }?.let {
-            records += PersonalRecord(
-                label = "Fastest average",
-                value = formatSpeed(it.avgSpeedMps, settings.imperialUnits),
-                activityTitle = it.title,
-                activityId = it.id,
-            )
-        }
-        return records
+
+        return RecordsUiState(
+            sport = sport,
+            availableSports = availableSports,
+            efforts = effortRecords,
+            milestones = milestones,
+        )
+    }
+
+    private companion object {
+        /** Records set within this window are flagged as new. */
+        const val RECENT_WINDOW_MILLIS = 30L * 24 * 60 * 60 * 1000
+        val WEEK_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.US)
+        val MONTH_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.US)
     }
 }

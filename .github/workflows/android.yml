@@ -23,7 +23,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Run unit tests
-        run: ./gradlew test --stacktrace
+        run: ./gradlew testDebugUnitTest --stacktrace
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
@@ -34,18 +34,23 @@ jobs:
           name: ostrava-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
 
-      # Also publish the APK to an orphan branch so it can be fetched over git
-      # (artifact downloads require access to Azure blob storage).
+      # Also publish the APK (and the share-card previews rendered by the tests) to an
+      # orphan branch so they can be fetched over git (artifact downloads require
+      # access to Azure blob storage).
       - name: Publish APK to apk-dist branch
         if: github.event_name == 'push'
         run: |
           mkdir -p /tmp/dist
           cp app/build/outputs/apk/debug/app-debug.apk /tmp/dist/ostrava-debug.apk
+          if [ -d app/build/share-previews ]; then
+            mkdir -p /tmp/dist/share-previews
+            cp app/build/share-previews/*.png /tmp/dist/share-previews/
+          fi
           cd /tmp/dist
           git init -b apk-dist
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git add ostrava-debug.apk
+          git add .
           git commit -m "Debug APK from ${GITHUB_SHA::7}"
           git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" apk-dist
         env:

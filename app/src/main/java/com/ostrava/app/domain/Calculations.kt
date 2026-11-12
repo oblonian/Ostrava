@@ -104,9 +104,23 @@ fun bestEffort(points: List<TrackPoint>, targetMeters: Double, label: String): B
 
 fun bestEffortsFor(type: ActivityType, points: List<TrackPoint>): List<BestEffort> {
     val targets = when (type) {
-        ActivityType.RUN -> listOf("1 km" to 1000.0, "5 km" to 5000.0, "10 km" to 10000.0, "Half marathon" to 21097.5)
-        ActivityType.RIDE -> listOf("5 km" to 5000.0, "20 km" to 20000.0, "40 km" to 40000.0)
-        else -> listOf("1 km" to 1000.0, "5 km" to 5000.0)
+        ActivityType.RUN -> listOf(
+            "400 m" to 400.0,
+            "1 km" to 1000.0,
+            "1 mile" to 1609.344,
+            "5 km" to 5000.0,
+            "10 km" to 10000.0,
+            "Half marathon" to 21097.5,
+            "Marathon" to 42195.0,
+        )
+        ActivityType.RIDE -> listOf(
+            "5 km" to 5000.0,
+            "10 km" to 10000.0,
+            "20 km" to 20000.0,
+            "40 km" to 40000.0,
+            "100 km" to 100000.0,
+        )
+        else -> listOf("1 km" to 1000.0, "5 km" to 5000.0, "10 km" to 10000.0)
     }
     return targets.mapNotNull { (label, meters) -> bestEffort(points, meters, label) }
 }

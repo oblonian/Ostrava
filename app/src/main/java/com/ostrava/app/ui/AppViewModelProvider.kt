@@ -10,6 +10,7 @@ import com.ostrava.app.ui.detail.ActivityDetailViewModel
 import com.ostrava.app.ui.feed.FeedViewModel
 import com.ostrava.app.ui.profile.ProfileViewModel
 import com.ostrava.app.ui.record.RecordViewModel
+import com.ostrava.app.ui.share.ShareViewModel
 import com.ostrava.app.ui.stats.StatsViewModel
 
 object AppViewModelProvider {
@@ -28,6 +29,13 @@ object AppViewModelProvider {
         }
         initializer {
             ProfileViewModel(app().container.settingsRepository, app().container.activityRepository)
+        }
+        initializer {
+            ShareViewModel(
+                savedStateHandle = createSavedStateHandle(),
+                repository = app().container.activityRepository,
+                settingsRepository = app().container.settingsRepository,
+            )
         }
         initializer {
             ActivityDetailViewModel(

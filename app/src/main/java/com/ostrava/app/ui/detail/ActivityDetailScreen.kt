@@ -1,5 +1,6 @@
 package com.ostrava.app.ui.detail
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +19,9 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,8 +43,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ostrava.app.data.db.ActivityEntity
+import com.ostrava.app.data.db.RankedEffort
 import com.ostrava.app.domain.ActivityType
-import com.ostrava.app.domain.BestEffort
 import com.ostrava.app.domain.Feel
 import com.ostrava.app.domain.Split
 import com.ostrava.app.domain.formatDateTime
@@ -60,10 +63,12 @@ import com.ostrava.app.ui.components.StatTile
 @Composable
 fun ActivityDetailScreen(
     onDeleted: () -> Unit,
+    onShare: (Long) -> Unit,
     viewModel: ActivityDetailViewModel = viewModel(factory = AppViewModelProvider.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val segmentEfforts by viewModel.segmentEfforts.collectAsStateWithLifecycle()
+    val rankedEfforts by viewModel.rankedEfforts.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -113,17 +118,50 @@ fun ActivityDetailScreen(
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { viewModel.shareImage(context) }) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            ) {
+                Button(onClick = { onShare(activity.id) }) {
                     Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Share image")
+                    Text("Share")
                 }
                 OutlinedButton(onClick = { viewModel.exportGpx(context) }) {
                     Text("Export GPX")
                 }
                 OutlinedButton(onClick = { showSegmentDialog = true }) {
                     Text("Make segment")
+                }
+            }
+
+            val records = rankedEfforts.filter { it.effortRank == 1 }
+            if (records.isNotEmpty()) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    ),
+                ) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("🏆", style = MaterialTheme.typography.headlineMedium)
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = if (records.size == 1) "Personal record" else "${records.size} personal records",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = "Your fastest ${records.joinToString(", ") { it.label }}",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
                 }
             }
 
@@ -163,8 +201,8 @@ fun ActivityDetailScreen(
                 }
             }
 
-            if (uiState.bestEfforts.isNotEmpty()) {
-                BestEffortsCard(efforts = uiState.bestEfforts, imperial = imperial)
+            if (rankedEfforts.isNotEmpty()) {
+                BestEffortsCard(efforts = rankedEfforts, imperial = imperial, usesPace = type.usesPace)
             }
 
             if (uiState.splits.isNotEmpty()) {
@@ -297,32 +335,56 @@ private fun StatGrid(activity: ActivityEntity, type: ActivityType, imperial: Boo
 }
 
 @Composable
-private fun BestEffortsCard(efforts: List<BestEffort>, imperial: Boolean) {
+private fun BestEffortsCard(efforts: List<RankedEffort>, imperial: Boolean, usesPace: Boolean) {
     Card {
         Column(Modifier.padding(16.dp)) {
             Text("Best efforts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             efforts.forEach { effort ->
+                val speed = effort.distanceMeters / (effort.durationMillis / 1000.0)
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(effort.label, style = MaterialTheme.typography.bodyLarge)
-                    Row {
-                        Text(
-                            formatDuration(effort.durationMillis),
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            formatPace(effort.distanceMeters / (effort.durationMillis / 1000.0), imperial),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    Text(
+                        text = when (effort.effortRank) {
+                            1 -> "🥇"
+                            2 -> "🥈"
+                            3 -> "🥉"
+                            else -> ""
+                        },
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.width(32.dp),
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(effort.label, style = MaterialTheme.typography.bodyLarge)
+                        val rankLabel = when (effort.effortRank) {
+                            1 -> "Personal record"
+                            2 -> "2nd fastest ever"
+                            3 -> "3rd fastest ever"
+                            else -> null
+                        }
+                        if (rankLabel != null) {
+                            Text(
+                                rankLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     }
+                    Text(
+                        formatDuration(effort.durationMillis),
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        if (usesPace) formatPace(speed, imperial) else formatSpeed(speed, imperial),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

@@ -21,6 +21,24 @@ data class EffortForActivity(
     val bestMillis: Long,
 )
 
+/** One of an activity's best efforts with its all-time rank for that sport and distance. */
+data class RankedEffort(
+    val label: String,
+    val distanceMeters: Double,
+    val durationMillis: Long,
+    val effortRank: Int,
+)
+
+data class EffortWithActivity(
+    val activityId: Long,
+    val activityType: String,
+    val label: String,
+    val distanceMeters: Double,
+    val durationMillis: Long,
+    val achievedAt: Long,
+    val activityTitle: String,
+)
+
 @Dao
 interface ActivityDao {
 
@@ -94,4 +112,46 @@ interface ActivityDao {
             "WHERE e.activityId = :activityId"
     )
     fun observeEffortsForActivity(activityId: Long): Flow<List<EffortForActivity>>
+
+    // Best efforts (personal records)
+
+    @Query("SELECT * FROM activities WHERE id = :id")
+    suspend fun getActivity(id: Long): ActivityEntity?
+
+    @Query("SELECT * FROM activities WHERE effortsVersion IS NULL OR effortsVersion < :version")
+    suspend fun getActivitiesNeedingEfforts(version: Int): List<ActivityEntity>
+
+    @Insert
+    suspend fun insertBestEfforts(efforts: List<BestEffortEntity>)
+
+    @Query("DELETE FROM best_efforts WHERE activityId = :activityId")
+    suspend fun deleteBestEfforts(activityId: Long)
+
+    @Query("UPDATE activities SET effortsVersion = :version WHERE id = :id")
+    suspend fun setEffortsVersion(id: Long, version: Int)
+
+    @Transaction
+    suspend fun replaceBestEfforts(activityId: Long, version: Int, efforts: List<BestEffortEntity>) {
+        deleteBestEfforts(activityId)
+        insertBestEfforts(efforts)
+        setEffortsVersion(activityId, version)
+    }
+
+    @Query(
+        "SELECT e.label AS label, e.distanceMeters AS distanceMeters, " +
+            "e.durationMillis AS durationMillis, " +
+            "(SELECT COUNT(*) FROM best_efforts o WHERE o.activityType = e.activityType " +
+            "AND o.label = e.label AND o.durationMillis < e.durationMillis) + 1 AS effortRank " +
+            "FROM best_efforts e WHERE e.activityId = :activityId ORDER BY e.distanceMeters"
+    )
+    fun observeRankedEfforts(activityId: Long): Flow<List<RankedEffort>>
+
+    @Query(
+        "SELECT e.activityId AS activityId, e.activityType AS activityType, e.label AS label, " +
+            "e.distanceMeters AS distanceMeters, e.durationMillis AS durationMillis, " +
+            "e.achievedAt AS achievedAt, a.title AS activityTitle " +
+            "FROM best_efforts e JOIN activities a ON a.id = e.activityId " +
+            "ORDER BY e.distanceMeters, e.durationMillis"
+    )
+    fun observeAllBestEfforts(): Flow<List<EffortWithActivity>>
 }

@@ -13,8 +13,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TrackPointEntity::class,
         SegmentEntity::class,
         SegmentEffortEntity::class,
+        BestEffortEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -25,7 +26,7 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var instance: AppDatabase? = null
 
-        private val MIGRATION_1_2 = object : Migration(1, 2) {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE activities ADD COLUMN avgHeartRate INTEGER")
                 db.execSQL("ALTER TABLE activities ADD COLUMN maxHeartRate INTEGER")
@@ -59,14 +60,35 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE activities ADD COLUMN effortsVersion INTEGER")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `best_efforts` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`activityId` INTEGER NOT NULL, `activityType` TEXT NOT NULL, " +
+                        "`label` TEXT NOT NULL, `distanceMeters` REAL NOT NULL, " +
+                        "`durationMillis` INTEGER NOT NULL, `achievedAt` INTEGER NOT NULL, " +
+                        "FOREIGN KEY(`activityId`) REFERENCES `activities`(`id`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_best_efforts_activityId` " +
+                        "ON `best_efforts` (`activityId`)"
+                )
+            }
+        }
+
+        const val DATABASE_NAME = "ostrava.db"
+
         fun getInstance(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "ostrava.db",
+                    DATABASE_NAME,
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { instance = it }
             }
