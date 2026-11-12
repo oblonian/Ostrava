@@ -14,13 +14,17 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SegmentEntity::class,
         SegmentEffortEntity::class,
         BestEffortEntity::class,
+        DraftPointEntity::class,
+        RecordingDraftEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun activityDao(): ActivityDao
+
+    abstract fun draftDao(): DraftDao
 
     companion object {
         @Volatile
@@ -79,6 +83,28 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE track_points ADD COLUMN heartRate INTEGER")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `draft_points` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`latitude` REAL NOT NULL, `longitude` REAL NOT NULL, " +
+                        "`altitude` REAL NOT NULL, `time` INTEGER NOT NULL, " +
+                        "`speedMps` REAL NOT NULL, `segment` INTEGER NOT NULL, `heartRate` INTEGER)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `recording_draft` (" +
+                        "`id` INTEGER NOT NULL, `type` TEXT NOT NULL, `startTime` INTEGER NOT NULL, " +
+                        "`movingTimeMillis` INTEGER NOT NULL, `distanceMeters` REAL NOT NULL, " +
+                        "`elevationGainMeters` REAL NOT NULL, `maxSpeedMps` REAL NOT NULL, " +
+                        "`segment` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+                )
+            }
+        }
+
+        val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+
         const val DATABASE_NAME = "ostrava.db"
 
         fun getInstance(context: Context): AppDatabase =
@@ -88,7 +114,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     DATABASE_NAME,
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(*ALL_MIGRATIONS)
                     .build()
                     .also { instance = it }
             }

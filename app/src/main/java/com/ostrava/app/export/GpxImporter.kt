@@ -70,6 +70,7 @@ object GpxImporter {
         var lon = 0.0
         var ele = 0.0
         var time = 0L
+        var heartRate: Int? = null
         var inTrkpt = false
         var currentTag = ""
 
@@ -87,6 +88,7 @@ object GpxImporter {
                             lon = parser.getAttributeValue(null, "lon")?.toDoubleOrNull() ?: 0.0
                             ele = 0.0
                             time = 0L
+                            heartRate = null
                         }
                     }
                 }
@@ -96,6 +98,8 @@ object GpxImporter {
                         when {
                             inTrkpt && currentTag == "ele" -> ele = text.toDoubleOrNull() ?: 0.0
                             inTrkpt && currentTag == "time" -> time = parseTime(text)
+                            // Garmin's track point extension, with or without its namespace prefix.
+                            inTrkpt && currentTag.substringAfter(':') == "hr" -> heartRate = text.toIntOrNull()
                             inTrk && !inTrkpt && currentTag == "name" && title.isEmpty() -> title = text
                             inTrk && !inTrkpt && currentTag == "type" && type.isEmpty() -> type = text
                         }
@@ -113,6 +117,7 @@ object GpxImporter {
                                     timeMillis = time,
                                     speedMps = 0f,
                                     segment = maxOf(segment, 0),
+                                    heartRate = heartRate,
                                 )
                             }
                         }

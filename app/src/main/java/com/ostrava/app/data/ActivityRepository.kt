@@ -13,8 +13,11 @@ import com.ostrava.app.data.db.TrackPointEntity
 import com.ostrava.app.domain.ActivityType
 import com.ostrava.app.domain.TrackPoint
 import com.ostrava.app.domain.bestEffortsFor
+import com.ostrava.app.domain.computeActivityStats
+import com.ostrava.app.domain.estimateCalories
 import com.ostrava.app.domain.matchSegment
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 class ActivityRepository(private val dao: ActivityDao) {
@@ -36,33 +39,84 @@ class ActivityRepository(private val dao: ActivityDao) {
                 timeMillis = it.time,
                 speedMps = it.speedMps,
                 segment = it.segment,
+                heartRate = it.heartRate,
             )
         }
 
     /** Saves the activity and records efforts for any segments its route matches. */
     suspend fun saveActivityWithEfforts(activity: ActivityEntity, points: List<TrackPoint>): Long {
         val id = dao.insertActivityWithPoints(activity, points.map { it.toEntity() })
-        dao.getSegmentsByType(activity.type).forEach { segment ->
-            matchSegment(
-                startLat = segment.startLat,
-                startLon = segment.startLon,
-                endLat = segment.endLat,
-                endLon = segment.endLon,
-                segmentDistanceMeters = segment.distanceMeters,
-                points = points,
-            )?.let { match ->
-                dao.insertSegmentEffort(
-                    SegmentEffortEntity(
-                        segmentId = segment.id,
-                        activityId = id,
-                        durationMillis = match.durationMillis,
-                        startTime = match.startTimeMillis,
-                    )
-                )
-            }
-        }
-        storeBestEfforts(activity.copy(id = id), points)
+        val saved = activity.copy(id = id)
+        storeSegmentEfforts(saved, points)
+        storeBestEfforts(saved, points)
         return id
+    }
+
+    /** An activity typed in by hand: it has stats but no GPS track. */
+    suspend fun addManualActivity(activity: ActivityEntity): Long =
+        dao.insertActivity(activity.copy(effortsVersion = EFFORTS_VERSION))
+
+    private suspend fun storeSegmentEfforts(activity: ActivityEntity, points: List<TrackPoint>) {
+        dao.getSegmentsByType(activity.type).forEach { segment ->
+            matchAgainst(segment, activity.id, points)
+        }
+    }
+
+    private suspend fun matchAgainst(segment: SegmentEntity, activityId: Long, points: List<TrackPoint>) {
+        matchSegment(
+            startLat = segment.startLat,
+            startLon = segment.startLon,
+            endLat = segment.endLat,
+            endLon = segment.endLon,
+            segmentDistanceMeters = segment.distanceMeters,
+            points = points,
+        )?.let { match ->
+            dao.insertSegmentEffort(
+                SegmentEffortEntity(
+                    segmentId = segment.id,
+                    activityId = activityId,
+                    durationMillis = match.durationMillis,
+                    startTime = match.startTimeMillis,
+                )
+            )
+        }
+    }
+
+    /**
+     * Cuts the activity down to the points between [fromIndex] and [toIndex] (inclusive)
+     * and recomputes everything derived from the track. Returns false if nothing usable
+     * would be left.
+     */
+    suspend fun trimActivity(activityId: Long, fromIndex: Int, toIndex: Int, weightKg: Float): Boolean {
+        val activity = dao.getActivity(activityId) ?: return false
+        val points = getTrackPoints(activityId)
+        if (fromIndex < 0 || toIndex > points.lastIndex || toIndex - fromIndex < 1) return false
+        if (fromIndex == 0 && toIndex == points.lastIndex) return false
+        val kept = points.subList(fromIndex, toIndex + 1)
+        val stats = computeActivityStats(kept)
+        if (stats.distanceMeters < 10.0) return false
+
+        val type = ActivityType.fromName(activity.type)
+        val heartRates = kept.mapNotNull { it.heartRate }
+        val updated = activity.copy(
+            startTime = kept.first().timeMillis,
+            endTime = kept.last().timeMillis,
+            movingTimeMillis = stats.movingTimeMillis,
+            distanceMeters = stats.distanceMeters,
+            avgSpeedMps = stats.avgSpeedMps,
+            maxSpeedMps = stats.maxSpeedMps,
+            elevationGainMeters = stats.elevationGainMeters,
+            calories = estimateCalories(type, stats.avgSpeedMps, stats.movingTimeMillis, weightKg),
+            avgHeartRate = heartRates.takeIf { it.isNotEmpty() }?.let { it.sum() / it.size }
+                ?: activity.avgHeartRate,
+            maxHeartRate = heartRates.maxOrNull() ?: activity.maxHeartRate,
+        )
+        dao.deleteTrackPointsOutside(activityId, kept.first().timeMillis, kept.last().timeMillis)
+        dao.updateActivity(updated)
+        dao.deleteSegmentEffortsForActivity(activityId)
+        storeSegmentEfforts(updated, kept)
+        storeBestEfforts(updated, kept)
+        return true
     }
 
     // Best efforts (personal records)
@@ -98,6 +152,10 @@ class ActivityRepository(private val dao: ActivityDao) {
     fun observeRankedEfforts(activityId: Long): Flow<List<RankedEffort>> =
         dao.observeRankedEfforts(activityId)
 
+    /** Records this activity took from an earlier effort (first-ever efforts don't count). */
+    suspend fun newRecords(activityId: Long): List<RankedEffort> =
+        dao.observeRankedEfforts(activityId).first().filter { it.effortRank == 1 && it.attempts > 1 }
+
     fun observeAllBestEfforts(): Flow<List<EffortWithActivity>> = dao.observeAllBestEfforts()
 
     /** Activity id -> number of all-time records it currently holds. */
@@ -110,34 +168,49 @@ class ActivityRepository(private val dao: ActivityDao) {
 
     // Segments
 
+    /**
+     * Saves the stretch of the route between [fromIndex] and [toIndex] as a segment, then
+     * times every existing activity of the same sport against it so its history fills in.
+     */
     suspend fun createSegmentFromActivity(
         activity: ActivityEntity,
         points: List<TrackPoint>,
         name: String,
-    ): Long {
-        val first = points.first()
-        val last = points.last()
-        val segmentId = dao.insertSegment(
-            SegmentEntity(
-                name = name,
-                activityType = activity.type,
-                startLat = first.latitude,
-                startLon = first.longitude,
-                endLat = last.latitude,
-                endLon = last.longitude,
-                distanceMeters = activity.distanceMeters,
-                createdAt = System.currentTimeMillis(),
-            )
+        fromIndex: Int = 0,
+        toIndex: Int = points.lastIndex,
+    ): Long? {
+        if (fromIndex < 0 || toIndex > points.lastIndex || toIndex - fromIndex < 1) return null
+        val stretch = points.subList(fromIndex, toIndex + 1)
+        val wholeRoute = fromIndex == 0 && toIndex == points.lastIndex
+        val stats = computeActivityStats(stretch)
+        val distance = if (wholeRoute) activity.distanceMeters else stats.distanceMeters
+        val duration = if (wholeRoute) activity.movingTimeMillis else stats.movingTimeMillis
+        if (distance < 50.0 || duration <= 0) return null
+
+        val segment = SegmentEntity(
+            name = name,
+            activityType = activity.type,
+            startLat = stretch.first().latitude,
+            startLon = stretch.first().longitude,
+            endLat = stretch.last().latitude,
+            endLon = stretch.last().longitude,
+            distanceMeters = distance,
+            createdAt = System.currentTimeMillis(),
         )
+        val segmentId = dao.insertSegment(segment)
         // The source activity is by definition the first effort.
         dao.insertSegmentEffort(
             SegmentEffortEntity(
                 segmentId = segmentId,
                 activityId = activity.id,
-                durationMillis = activity.movingTimeMillis,
-                startTime = activity.startTime,
+                durationMillis = duration,
+                startTime = stretch.first().timeMillis,
             )
         )
+        val saved = segment.copy(id = segmentId)
+        dao.getActivitiesList()
+            .filter { it.type == activity.type && it.id != activity.id }
+            .forEach { other -> matchAgainst(saved, other.id, getTrackPoints(other.id)) }
         return segmentId
     }
 
@@ -160,6 +233,7 @@ class ActivityRepository(private val dao: ActivityDao) {
         time = timeMillis,
         speedMps = speedMps,
         segment = segment,
+        heartRate = heartRate,
     )
 
     companion object {

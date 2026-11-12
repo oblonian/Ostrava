@@ -47,6 +47,38 @@ data class TrackPointEntity(
     val time: Long,
     val speedMps: Float,
     val segment: Int,
+    // v4: nullable so the 3->4 migration is a plain ALTER TABLE ADD COLUMN.
+    val heartRate: Int? = null,
+)
+
+/**
+ * GPS fixes of the recording in progress, written as they arrive so a crash or a
+ * killed process doesn't lose the activity. Cleared when the recording is saved or discarded.
+ */
+@Entity(tableName = "draft_points")
+data class DraftPointEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val latitude: Double,
+    val longitude: Double,
+    val altitude: Double,
+    val time: Long,
+    val speedMps: Float,
+    val segment: Int,
+    val heartRate: Int? = null,
+)
+
+/** Progress of the recording in progress; a single row with id 1. */
+@Entity(tableName = "recording_draft")
+data class RecordingDraftEntity(
+    @PrimaryKey val id: Int = 1,
+    val type: String,
+    val startTime: Long,
+    val movingTimeMillis: Long,
+    val distanceMeters: Double,
+    val elevationGainMeters: Double,
+    val maxSpeedMps: Double,
+    val segment: Int,
+    val updatedAt: Long,
 )
 
 @Entity(tableName = "segments")

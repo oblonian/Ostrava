@@ -33,6 +33,7 @@ object AppViewModelProvider {
         initializer {
             ShareViewModel(
                 savedStateHandle = createSavedStateHandle(),
+                appContext = app(),
                 repository = app().container.activityRepository,
                 settingsRepository = app().container.settingsRepository,
             )

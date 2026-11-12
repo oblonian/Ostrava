@@ -53,6 +53,7 @@ class ProfileViewModel(
             val result = runCatching {
                 withContext(Dispatchers.IO) { BackupManager.export(context, repository, uri) }
             }
+            if (result.isSuccess) settingsRepository.setLastBackupAt(System.currentTimeMillis())
             toast(
                 context,
                 result.fold(

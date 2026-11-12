@@ -23,6 +23,8 @@ data class TrackPoint(
     val timeMillis: Long,
     val speedMps: Float,
     val segment: Int,
+    /** Heart rate at this fix, when a sensor was connected. */
+    val heartRate: Int? = null,
 )
 
 data class Split(
@@ -53,7 +55,23 @@ data class UserSettings(
     val keepScreenOn: Boolean = true,
     val hapticsEnabled: Boolean = true,
     val onboardingDone: Boolean = false,
+    val remindersEnabled: Boolean = true,
+    val reminderSlot: ReminderSlot = ReminderSlot.AUTO,
+    val healthConnectEnabled: Boolean = false,
+    /** Epoch millis of the last successful backup, 0 if never. */
+    val lastBackupAt: Long = 0L,
+    /** Keys of tips the athlete has dismissed; see InsightEngine. */
+    val dismissedInsights: Set<String> = emptySet(),
+    val batteryPromptDismissed: Boolean = false,
 )
+
+/** When the daily reminder check runs. AUTO follows the athlete's usual activity time. */
+enum class ReminderSlot(val label: String, val hour: Int?) {
+    AUTO("Smart", null),
+    MORNING("Morning", 7),
+    MIDDAY("Midday", 12),
+    EVENING("Evening", 18),
+}
 
 data class HeartRateZone(
     val index: Int,

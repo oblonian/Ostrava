@@ -10,6 +10,7 @@ import android.graphics.Path
 import android.graphics.Shader
 import com.ostrava.app.domain.TrackPoint
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -52,7 +53,7 @@ class ShareCardRendererTest {
         for (template in ShareTemplate.entries) {
             for (aspect in ShareAspect.entries) {
                 val spec = ShareSpec(template = template, aspect = aspect)
-                val bitmap = ShareCardRenderer.render(spec, content, photo, scale = 0.5f)
+                val bitmap = ShareCardRenderer.render(spec, content, photo, fakeMap(aspect), scale = 0.5f)
                 assertEquals(aspect.width / 2, bitmap.width)
                 assertEquals(aspect.height / 2, bitmap.height)
             }
@@ -86,15 +87,83 @@ class ShareCardRendererTest {
             "photo-story" to ShareSpec(ShareTemplate.PHOTO, ShareAspect.STORY),
             "photo-post-six-stats" to ShareSpec(ShareTemplate.PHOTO, ShareAspect.POST, stats = six),
             "photo-square" to ShareSpec(ShareTemplate.PHOTO, ShareAspect.SQUARE),
+            "photo-story-text-top-zoomed" to ShareSpec(
+                ShareTemplate.PHOTO, ShareAspect.STORY, textAtTop = true,
+                photoZoom = 1.8f, photoCenterX = 0.72f, photoCenterY = 0.5f,
+            ),
+            "map-story" to ShareSpec(ShareTemplate.MAP, ShareAspect.STORY),
+            "map-post-text-top" to ShareSpec(ShareTemplate.MAP, ShareAspect.POST, textAtTop = true),
+            "sticker-story" to ShareSpec(ShareTemplate.STICKER, ShareAspect.STORY),
+            "route-story-text-top" to ShareSpec(ShareTemplate.ROUTE, ShareAspect.STORY, textAtTop = true),
         )
         val dir = File("build/share-previews").apply { mkdirs() }
         previews.forEach { (name, spec) ->
-            val bitmap = ShareCardRenderer.render(spec, content, photo, scale = 0.5f)
+            val bitmap = ShareCardRenderer.render(spec, content, photo, fakeMap(spec.aspect, spec.textAtTop), scale = 0.5f)
             File(dir, "$name.png").outputStream().use {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
             }
         }
         assertEquals(previews.size, dir.listFiles { file -> file.extension == "png" }?.size)
+    }
+
+    @Test
+    fun `the sticker has a transparent background`() {
+        val bitmap = ShareCardRenderer.render(ShareSpec(ShareTemplate.STICKER), content, photo = null)
+        assertEquals(0, Color.alpha(bitmap.getPixel(bitmap.width / 2, 40)))
+    }
+
+    @Test
+    fun `the photo always covers the card however it is dragged`() {
+        var spec = ShareSpec(ShareTemplate.PHOTO, ShareAspect.STORY)
+        // Drag hard right and down, then zoom in and drag hard the other way.
+        spec = ShareCardRenderer.movePhoto(spec, 1600, 1200, dxFraction = 5f, dyFraction = 5f, zoomChange = 1f)
+        var placement = ShareCardRenderer.photoPlacement(spec, 1600, 1200)
+        assertEquals(0f, placement.left, 0.5f)
+        spec = ShareCardRenderer.movePhoto(spec, 1600, 1200, dxFraction = -9f, dyFraction = -9f, zoomChange = 2f)
+        placement = ShareCardRenderer.photoPlacement(spec, 1600, 1200)
+        assertEquals(2f, spec.photoZoom, 0.001f)
+        assertEquals(1080f, placement.right, 0.5f)
+        assertEquals(1920f, placement.bottom, 0.5f)
+        assertTrue(placement.left <= 0f && placement.top <= 0f)
+        // Zoom can't go below "just fills the card".
+        spec = ShareCardRenderer.movePhoto(spec, 1600, 1200, 0f, 0f, zoomChange = 0.01f)
+        assertEquals(1f, spec.photoZoom, 0.001f)
+    }
+
+    @Test
+    fun `the map frame centres the route in its target area`() {
+        val target = MapBackdropLoader.routeArea(ShareAspect.STORY, textAtTop = false)
+        val points = loopTrack()
+        val frame = MapMath.frame(points, target)
+        val projected = points.map { frame.project(it.latitude, it.longitude) }
+        val minX = projected.minOf { it.x }
+        val maxX = projected.maxOf { it.x }
+        val minY = projected.minOf { it.y }
+        val maxY = projected.maxOf { it.y }
+        // The route fits inside the target and is centred on it.
+        assertTrue(minX >= target.left - 1f && maxX <= target.right + 1f)
+        assertTrue(minY >= target.top - 1f && maxY <= target.bottom + 1f)
+        assertEquals(target.centerX(), (minX + maxX) / 2f, 2f)
+        assertEquals(target.centerY(), (minY + maxY) / 2f, 2f)
+        assertTrue(frame.scale >= 1.0 && frame.scale < 2.0)
+    }
+
+    /** Stand-in for map tiles: a street-like grid, with the real projection for the route. */
+    private fun fakeMap(aspect: ShareAspect, textAtTop: Boolean = false): MapBackdrop {
+        val bitmap = Bitmap.createBitmap(aspect.width, aspect.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.rgb(232, 228, 216))
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        paint.color = Color.rgb(170, 211, 223)
+        canvas.drawRect(0f, aspect.height * 0.30f, aspect.width.toFloat(), aspect.height * 0.36f, paint)
+        paint.color = Color.rgb(200, 230, 190)
+        canvas.drawRect(620f, 120f, 980f, 420f, paint)
+        paint.color = Color.WHITE
+        paint.strokeWidth = 14f
+        for (x in 0..aspect.width step 180) canvas.drawLine(x.toFloat(), 0f, x + 120f, aspect.height.toFloat(), paint)
+        for (y in 0..aspect.height step 200) canvas.drawLine(0f, y.toFloat(), aspect.width.toFloat(), y - 60f, paint)
+        val frame = MapMath.frame(loopTrack(), MapBackdropLoader.routeArea(aspect, textAtTop))
+        return MapBackdrop(bitmap) { latitude, longitude -> frame.project(latitude, longitude) }
     }
 
     /** A wobbly closed loop, roughly 5 km around. */

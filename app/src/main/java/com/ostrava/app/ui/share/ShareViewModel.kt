@@ -19,6 +19,9 @@ import com.ostrava.app.domain.formatDuration
 import com.ostrava.app.domain.formatElevation
 import com.ostrava.app.domain.formatPace
 import com.ostrava.app.domain.formatSpeed
+import com.ostrava.app.export.MapBackdrop
+import com.ostrava.app.export.MapBackdropLoader
+import com.ostrava.app.export.ShareAspect
 import com.ostrava.app.export.ShareCardRenderer
 import com.ostrava.app.export.ShareContent
 import com.ostrava.app.export.ShareOutput
@@ -46,12 +49,17 @@ data class ShareUiState(
     val hasPhoto: Boolean = false,
     val availableStats: List<ShareStat> = emptyList(),
     val hasPersonalRecord: Boolean = false,
+    val hasRoute: Boolean = false,
     val exporting: Boolean = false,
+    val mapLoading: Boolean = false,
+    /** True when the map tiles couldn't be fetched (usually: offline). */
+    val mapUnavailable: Boolean = false,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ShareViewModel(
     savedStateHandle: SavedStateHandle,
+    private val appContext: Context,
     private val repository: ActivityRepository,
     private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
@@ -67,15 +75,32 @@ class ShareViewModel(
     private val photo = MutableStateFlow<Bitmap?>(null)
     private val content = MutableStateFlow<ShareContent?>(null)
 
+    /** Map backdrops already built, keyed by the card shape they were framed for. */
+    private val mapBackdrops = MutableStateFlow<Map<MapKey, MapBackdrop>>(emptyMap())
+    private val mapsInFlight = mutableSetOf<MapKey>()
+
+    private data class MapKey(val aspect: ShareAspect, val textAtTop: Boolean)
+
+    private class RenderInput(
+        val spec: ShareSpec,
+        val photo: Bitmap?,
+        val content: ShareContent?,
+        val map: MapBackdrop?,
+    )
+
     /** Half-resolution render of the card, re-drawn whenever an option changes. */
-    val preview: StateFlow<Bitmap?> = combine(_spec, photo, content) { spec, photo, content ->
-        Triple(spec, photo, content)
-    }.mapLatest { (spec, photo, content) ->
+    val preview: StateFlow<Bitmap?> = combine(_spec, photo, content, mapBackdrops) { spec, photo, content, maps ->
+        RenderInput(spec, photo, content, mapFor(spec, maps))
+    }.mapLatest { input ->
+        val content = input.content
         if (content == null) null
         else withContext(Dispatchers.Default) {
-            ShareCardRenderer.render(spec, content, photo, PREVIEW_SCALE)
+            ShareCardRenderer.render(input.spec, content, input.photo, input.map, PREVIEW_SCALE)
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    private fun mapFor(spec: ShareSpec, maps: Map<MapKey, MapBackdrop>): MapBackdrop? =
+        if (spec.template == ShareTemplate.MAP) maps[MapKey(spec.aspect, spec.textAtTop)] else null
 
     init {
         viewModelScope.launch {
@@ -96,7 +121,48 @@ class ShareViewModel(
                 loading = false,
                 availableStats = built.stats.map { it.stat },
                 hasPersonalRecord = built.prText != null,
+                hasRoute = points.size >= 2,
             )
+        }
+        // Fetch the map the first time the Map style is shown for a given card shape.
+        viewModelScope.launch {
+            combine(_spec, content) { spec, content -> spec to content }.collect { (spec, content) ->
+                if (spec.template == ShareTemplate.MAP && content != null) {
+                    ensureMap(MapKey(spec.aspect, spec.textAtTop), content)
+                }
+            }
+        }
+    }
+
+    private fun ensureMap(key: MapKey, content: ShareContent) {
+        if (key in mapBackdrops.value || !mapsInFlight.add(key)) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(mapLoading = true, mapUnavailable = false) }
+            val backdrop = runCatching {
+                MapBackdropLoader.load(appContext, content.points, key.aspect, key.textAtTop)
+            }.getOrNull()
+            mapsInFlight.remove(key)
+            if (backdrop != null) mapBackdrops.update { it + (key to backdrop) }
+            _uiState.update { it.copy(mapLoading = mapsInFlight.isNotEmpty(), mapUnavailable = backdrop == null) }
+        }
+    }
+
+    /** Retries after a failed map download. */
+    fun retryMap() {
+        val content = content.value ?: return
+        val spec = _spec.value
+        ensureMap(MapKey(spec.aspect, spec.textAtTop), content)
+    }
+
+    /**
+     * Drags and pinches on the preview reframe the photo. [dxFraction] and [dyFraction]
+     * are the drag as a fraction of the preview's width and height.
+     */
+    fun movePhoto(dxFraction: Float, dyFraction: Float, zoomChange: Float) {
+        val bitmap = photo.value ?: return
+        _spec.update { spec ->
+            if (spec.template != ShareTemplate.PHOTO) spec
+            else ShareCardRenderer.movePhoto(spec, bitmap.width, bitmap.height, dxFraction, dyFraction, zoomChange)
         }
     }
 
@@ -167,7 +233,10 @@ class ShareViewModel(
             }
             photo.value = bitmap
             _uiState.update { it.copy(hasPhoto = true) }
-            _spec.update { it.copy(template = ShareTemplate.PHOTO) }
+            // A new photo starts centred and un-zoomed.
+            _spec.update {
+                it.copy(template = ShareTemplate.PHOTO, photoZoom = 1f, photoCenterX = 0.5f, photoCenterY = 0.5f)
+            }
         }
     }
 
@@ -204,13 +273,17 @@ class ShareViewModel(
         if (_uiState.value.exporting) return
         val currentSpec = _spec.value
         val currentPhoto = photo.value
+        val currentMap = mapFor(currentSpec, mapBackdrops.value)
         viewModelScope.launch {
             _uiState.update { it.copy(exporting = true) }
             try {
                 val bitmap = withContext(Dispatchers.Default) {
-                    ShareCardRenderer.render(currentSpec, currentContent, currentPhoto)
+                    ShareCardRenderer.render(currentSpec, currentContent, currentPhoto, currentMap)
                 }
-                val photographic = currentSpec.template == ShareTemplate.PHOTO && currentPhoto != null
+                // Photos and maps compress well as JPEG; the sticker must stay PNG to keep
+                // its transparent background.
+                val photographic = (currentSpec.template == ShareTemplate.PHOTO && currentPhoto != null) ||
+                    (currentSpec.template == ShareTemplate.MAP && currentMap != null)
                 action(bitmap, photographic, currentContent.title)
             } catch (e: CancellationException) {
                 throw e

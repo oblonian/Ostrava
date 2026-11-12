@@ -13,14 +13,30 @@ android {
         applicationId = "com.ostrava.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
+    }
+
+    signingConfigs {
+        // A fixed, deliberately public key so that builds from any machine (CI runners
+        // included) carry the same signature and can be installed over one another.
+        // It is only for sideloading: a Play Store release needs a private key instead.
+        create("sideload") {
+            storeFile = file("sideload.keystore")
+            storePassword = "ostrava-sideload"
+            keyAlias = "ostrava"
+            keyPassword = "ostrava-sideload"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("sideload")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("sideload")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -74,6 +90,8 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.play.services.location)
     implementation(libs.osmdroid)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.health.connect)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

@@ -29,25 +29,32 @@ import com.ostrava.app.MainActivity
 import com.ostrava.app.OstravaApp
 import com.ostrava.app.R
 import com.ostrava.app.data.db.ActivityEntity
+import com.ostrava.app.data.db.RecordingDraftEntity
 import com.ostrava.app.domain.ActivityType
+import com.ostrava.app.domain.GpsSmoother
 import com.ostrava.app.domain.IntervalConfig
 import com.ostrava.app.domain.IntervalPhase
 import com.ostrava.app.domain.METERS_PER_MILE
 import com.ostrava.app.domain.TrackPoint
+import com.ostrava.app.domain.computeActivityStats
 import com.ostrava.app.domain.defaultActivityTitle
 import com.ostrava.app.domain.estimateCalories
 import com.ostrava.app.domain.formatDistance
 import com.ostrava.app.domain.formatDuration
+import com.ostrava.app.domain.maxPlausibleSpeedMps
 import com.ostrava.app.domain.spokenDuration
+import com.ostrava.app.notify.Notifications
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 class TrackingService : Service() {
@@ -62,6 +69,13 @@ class TrackingService : Service() {
     private var lastAcceptedPoint: TrackPoint? = null
     private var altitudeBaseline: Double? = null
     private var lowSpeedSinceMillis: Long? = null
+    private val smoother = GpsSmoother()
+    private var rejectedFixes = 0
+    private var finishing = false
+
+    // Writes to the crash-recovery draft run one at a time, in order, off the main thread.
+    private val draftWrites = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+    private var tickCount = 0
 
     // Settings captured at start
     private var autoPauseEnabled = true
@@ -105,8 +119,125 @@ class TrackingService : Service() {
                 feel = intent.getStringExtra(EXTRA_FEEL),
             )
             ACTION_DISCARD -> discard()
+            ACTION_RESUME_DRAFT -> resumeFromDraft()
+            // A null intent means Android restarted the service after the process died
+            // mid-recording: pick the recording back up from the saved draft.
+            null -> if (intent == null) resumeFromDraft()
         }
         return START_STICKY
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        scope.launch(Dispatchers.IO) {
+            for (write in draftWrites) {
+                runCatching { write() }
+            }
+        }
+    }
+
+    private val drafts get() = (application as OstravaApp).container.draftRepository
+
+    private fun enqueueDraftWrite(write: suspend () -> Unit) {
+        draftWrites.trySend(write)
+    }
+
+    private fun saveDraftProgress() {
+        val state = TrackingStateHolder.state.value
+        if (!state.isActive) return
+        val meta = RecordingDraftEntity(
+            type = state.type.name,
+            startTime = startTimeWallMillis,
+            movingTimeMillis = state.movingTimeMillis,
+            distanceMeters = state.distanceMeters,
+            elevationGainMeters = state.elevationGainMeters,
+            maxSpeedMps = state.maxSpeedMps.toDouble(),
+            segment = currentSegment,
+            updatedAt = System.currentTimeMillis(),
+        )
+        enqueueDraftWrite { drafts.updateProgress(meta) }
+    }
+
+    private fun loadSettings(onLoaded: () -> Unit = {}) {
+        val container = (application as OstravaApp).container
+        scope.launch {
+            val settings = container.settingsRepository.settings.first()
+            autoPauseEnabled = settings.autoPauseEnabled
+            weightKg = settings.weightKg
+            imperialUnits = settings.imperialUnits
+            audioCues = settings.audioCuesEnabled
+            haptics = settings.hapticsEnabled
+            onLoaded()
+        }
+    }
+
+    private fun ensureTextToSpeech() {
+        if (tts == null) {
+            tts = TextToSpeech(applicationContext) { status ->
+                ttsReady = status == TextToSpeech.SUCCESS
+                if (ttsReady) tts?.language = Locale.getDefault()
+            }
+        }
+    }
+
+    /**
+     * Continues a recording that was interrupted by a crash or by Android killing the app.
+     * The route so far comes from the draft; the gap while the app was dead is not counted.
+     */
+    private fun resumeFromDraft() {
+        if (TrackingStateHolder.state.value.isActive) return
+        try {
+            startForegroundWithNotification()
+        } catch (_: Exception) {
+            // Android won't let a location service start from the background. The draft
+            // stays on disk and the app offers to resume or save it when next opened.
+            stopSelf()
+            return
+        }
+        scope.launch {
+            val draft = withContext(Dispatchers.IO) { runCatching { drafts.load() }.getOrNull() }
+            if (draft == null) {
+                shutdown()
+                return@launch
+            }
+            val type = ActivityType.fromName(draft.meta.type)
+            val points = draft.points
+            startTimeWallMillis = draft.meta.startTime
+            lastTickElapsed = SystemClock.elapsedRealtime()
+            currentSegment = maxOf(draft.meta.segment, points.maxOfOrNull { it.segment } ?: 0) + 1
+            lastAcceptedPoint = null
+            altitudeBaseline = null
+            lowSpeedSinceMillis = null
+            smoother.reset()
+            rejectedFixes = 0
+            finishing = false
+            hrSamples.clear()
+            hrSamples += points.mapNotNull { it.heartRate }
+            intervalPhases = emptyList()
+            val stats = computeActivityStats(points)
+            TrackingStateHolder.lastSavedActivityId.value = null
+            TrackingStateHolder.state.value = RecordingState(
+                status = TrackingStatus.TRACKING,
+                type = type,
+                distanceMeters = maxOf(stats.distanceMeters, draft.meta.distanceMeters),
+                movingTimeMillis = draft.meta.movingTimeMillis.takeIf { it > 0 } ?: stats.movingTimeMillis,
+                maxSpeedMps = draft.meta.maxSpeedMps.toFloat(),
+                elevationGainMeters = maxOf(stats.elevationGainMeters, draft.meta.elevationGainMeters),
+                points = points,
+                lastFix = points.lastOrNull(),
+            )
+            loadSettings {
+                // Don't re-announce splits that were already spoken before the interruption.
+                val splitLength = if (imperialUnits) METERS_PER_MILE else 1000.0
+                val state = TrackingStateHolder.state.value
+                lastAnnouncedSplit = (state.distanceMeters / splitLength).toInt()
+                lastSplitTimeMillis = state.movingTimeMillis
+            }
+            ensureTextToSpeech()
+            requestLocationUpdates()
+            startTicker()
+            updateNotification()
+        }
     }
 
     private fun start(type: ActivityType, intervals: IntervalConfig?) {
@@ -126,22 +257,13 @@ class TrackingService : Service() {
         TrackingStateHolder.lastSavedActivityId.value = null
         TrackingStateHolder.state.value = RecordingState(status = TrackingStatus.TRACKING, type = type)
 
-        val container = (application as OstravaApp).container
-        scope.launch {
-            val settings = container.settingsRepository.settings.first()
-            autoPauseEnabled = settings.autoPauseEnabled
-            weightKg = settings.weightKg
-            imperialUnits = settings.imperialUnits
-            audioCues = settings.audioCuesEnabled
-            haptics = settings.hapticsEnabled
-        }
-
-        if (tts == null) {
-            tts = TextToSpeech(applicationContext) { status ->
-                ttsReady = status == TextToSpeech.SUCCESS
-                if (ttsReady) tts?.language = Locale.getDefault()
-            }
-        }
+        smoother.reset()
+        rejectedFixes = 0
+        finishing = false
+        loadSettings()
+        ensureTextToSpeech()
+        val startTime = startTimeWallMillis
+        enqueueDraftWrite { drafts.begin(type, startTime) }
 
         startForegroundWithNotification()
         requestLocationUpdates()
@@ -158,6 +280,7 @@ class TrackingService : Service() {
         )
         vibrate(longArrayOf(0, 150, 100, 150))
         if (!manual) speak("Auto paused")
+        saveDraftProgress()
         updateNotification()
     }
 
@@ -168,6 +291,8 @@ class TrackingService : Service() {
         currentSegment++
         lastAcceptedPoint = null
         lowSpeedSinceMillis = null
+        smoother.reset()
+        rejectedFixes = 0
         lastTickElapsed = SystemClock.elapsedRealtime()
         TrackingStateHolder.state.value = state.copy(status = TrackingStatus.TRACKING)
         vibrate(longArrayOf(0, 150))
@@ -177,14 +302,18 @@ class TrackingService : Service() {
 
     private fun finish(title: String?, feel: String?) {
         val state = TrackingStateHolder.state.value
-        if (!state.isActive) return
+        if (!state.isActive || finishing) return
+        finishing = true
         stopLocationUpdates()
         tickerJob?.cancel()
 
         if (state.points.size < 2 || state.distanceMeters < 10.0) {
             // Too short to be meaningful; drop it.
-            TrackingStateHolder.lastSavedActivityId.value = -1L
-            shutdown()
+            scope.launch {
+                withContext(Dispatchers.IO) { runCatching { drafts.clear() } }
+                TrackingStateHolder.lastSavedActivityId.value = -1L
+                shutdown()
+            }
             return
         }
 
@@ -207,20 +336,44 @@ class TrackingService : Service() {
             feel = feel?.takeIf { it.isNotBlank() },
         )
         val points = state.points
-        val repository = (application as OstravaApp).container.activityRepository
+        val app = application as OstravaApp
+        val repository = app.container.activityRepository
         vibrate(longArrayOf(0, 300, 150, 300))
-        scope.launch(Dispatchers.IO) {
-            val id = repository.saveActivityWithEfforts(entity, points)
+        scope.launch {
+            val id = withContext(Dispatchers.IO) {
+                val saved = repository.saveActivityWithEfforts(entity, points)
+                // Only once the activity is safely stored does the recovery draft go away.
+                runCatching { drafts.clear() }
+                saved
+            }
+            val records = withContext(Dispatchers.IO) {
+                runCatching { repository.newRecords(id) }.getOrDefault(emptyList())
+            }
+            app.onActivitySaved(entity.copy(id = id))
             TrackingStateHolder.lastSavedActivityId.value = id
-            launch(Dispatchers.Main) { shutdown() }
+            TrackingStateHolder.reset()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            if (records.isNotEmpty()) {
+                Notifications.showPersonalRecord(this@TrackingService, id, entity.title, records)
+                val spoken = records.joinToString(", ") { it.label }
+                speak("New personal record. $spoken.")
+                // Give the announcement time to play before the service goes away.
+                if (audioCues && ttsReady) delay(RECORD_ANNOUNCEMENT_MILLIS)
+            }
+            stopSelf()
         }
     }
 
     private fun discard() {
+        if (finishing) return
+        finishing = true
         stopLocationUpdates()
         tickerJob?.cancel()
-        TrackingStateHolder.lastSavedActivityId.value = null
-        shutdown()
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { drafts.clear() } }
+            TrackingStateHolder.lastSavedActivityId.value = null
+            shutdown()
+        }
     }
 
     private fun shutdown() {
@@ -233,6 +386,7 @@ class TrackingService : Service() {
         stopLocationUpdates()
         tts?.shutdown()
         tts = null
+        draftWrites.close()
         scope.cancel()
         super.onDestroy()
     }
@@ -257,13 +411,24 @@ class TrackingService : Service() {
         val state = TrackingStateHolder.state.value
         if (!state.isActive) return
 
+        val accuracy = if (location.hasAccuracy()) location.accuracy else DEFAULT_ACCURACY_METERS
+        val speed = if (location.hasSpeed()) location.speed else 0f
+        val accuracyOk = accuracy <= MAX_ACCURACY_METERS
+
+        // Smooth while tracking; a fix this poor would only drag the estimate around.
+        val (latitude, longitude) = if (state.status == TrackingStatus.TRACKING && accuracyOk) {
+            smoother.update(location.latitude, location.longitude, accuracy, location.time, speed)
+        } else {
+            location.latitude to location.longitude
+        }
         val fix = TrackPoint(
-            latitude = location.latitude,
-            longitude = location.longitude,
+            latitude = latitude,
+            longitude = longitude,
             altitude = if (location.hasAltitude()) location.altitude else 0.0,
             timeMillis = location.time,
-            speedMps = if (location.hasSpeed()) location.speed else 0f,
+            speedMps = speed,
             segment = currentSegment,
+            heartRate = HeartRateMonitor.bpm.value?.takeIf { it > 30 },
         )
         var newState = state.copy(
             lastFix = fix,
@@ -271,21 +436,41 @@ class TrackingService : Service() {
             gpsAccuracyMeters = if (location.hasAccuracy()) location.accuracy else null,
         )
 
-        val accuracyOk = !location.hasAccuracy() || location.accuracy <= MAX_ACCURACY_METERS
-
         if (state.status == TrackingStatus.TRACKING && accuracyOk) {
             val last = lastAcceptedPoint
             if (last == null) {
-                lastAcceptedPoint = fix
+                accept(fix)
                 altitudeBaseline = fix.altitude
                 newState = newState.copy(points = newState.points + fix)
             } else {
                 val results = FloatArray(1)
                 Location.distanceBetween(last.latitude, last.longitude, fix.latitude, fix.longitude, results)
                 val displacement = results[0]
-                if (displacement >= MIN_DISPLACEMENT_METERS) {
+                val elapsedSeconds = (fix.timeMillis - last.timeMillis) / 1000.0
+                val impliedSpeed = if (elapsedSeconds > 0) displacement / elapsedSeconds else 0.0
+                // Poorer fixes must move further before they count, so jitter isn't logged as distance.
+                val minDisplacement = (accuracy * 0.3f).coerceIn(MIN_DISPLACEMENT_METERS, MAX_MIN_DISPLACEMENT_METERS)
+
+                if (impliedSpeed > maxPlausibleSpeedMps(state.type)) {
+                    // A jump no athlete could make. Usually a one-off glitch; if it persists the
+                    // position really did move (tunnel, lost signal), so restart the line there.
+                    if (++rejectedFixes >= MAX_REJECTED_FIXES) {
+                        rejectedFixes = 0
+                        currentSegment++
+                        smoother.reset()
+                        val restart = fix.copy(
+                            latitude = location.latitude,
+                            longitude = location.longitude,
+                            segment = currentSegment,
+                        )
+                        accept(restart)
+                        altitudeBaseline = restart.altitude
+                        newState = newState.copy(points = newState.points + restart, lastFix = restart)
+                    }
+                } else if (displacement >= minDisplacement) {
+                    rejectedFixes = 0
                     val gain = computeElevationGain(fix.altitude)
-                    lastAcceptedPoint = fix
+                    accept(fix)
                     newState = newState.copy(
                         points = newState.points + fix,
                         distanceMeters = newState.distanceMeters + displacement,
@@ -299,6 +484,12 @@ class TrackingService : Service() {
         TrackingStateHolder.state.value = newState
         announceSplitIfCrossed(newState)
         handleAutoPause(fix.speedMps)
+    }
+
+    /** Records a point as part of the route and writes it to the crash-recovery draft. */
+    private fun accept(point: TrackPoint) {
+        lastAcceptedPoint = point
+        enqueueDraftWrite { drafts.appendPoint(point) }
     }
 
     /** Speaks a cue when the athlete crosses the next whole km/mile. */
@@ -384,6 +575,7 @@ class TrackingService : Service() {
                 }
                 lastTickElapsed = now
                 if (++notificationCounter % 2 == 0) updateNotification()
+                if (++tickCount % DRAFT_SAVE_INTERVAL_TICKS == 0) saveDraftProgress()
                 delay(1000)
             }
         }
@@ -483,6 +675,7 @@ class TrackingService : Service() {
         const val ACTION_RESUME = "com.ostrava.app.action.RESUME"
         const val ACTION_FINISH = "com.ostrava.app.action.FINISH"
         const val ACTION_DISCARD = "com.ostrava.app.action.DISCARD"
+        const val ACTION_RESUME_DRAFT = "com.ostrava.app.action.RESUME_DRAFT"
         const val EXTRA_TYPE = "extra_type"
         const val EXTRA_TITLE = "extra_title"
         const val EXTRA_FEEL = "extra_feel"
@@ -491,8 +684,13 @@ class TrackingService : Service() {
         const val NOTIFICATION_ID = 42
         private const val LOCATION_INTERVAL_MS = 2000L
         private const val LOCATION_FASTEST_MS = 1000L
-        private const val MAX_ACCURACY_METERS = 25f
+        private const val MAX_ACCURACY_METERS = 30f
+        private const val DEFAULT_ACCURACY_METERS = 15f
         private const val MIN_DISPLACEMENT_METERS = 2f
+        private const val MAX_MIN_DISPLACEMENT_METERS = 8f
+        private const val MAX_REJECTED_FIXES = 5
+        private const val DRAFT_SAVE_INTERVAL_TICKS = 5
+        private const val RECORD_ANNOUNCEMENT_MILLIS = 4500L
         private const val ELEVATION_HYSTERESIS_METERS = 2.0
         private const val AUTO_PAUSE_DELAY_MS = 5000L
 
@@ -502,6 +700,14 @@ class TrackingService : Service() {
                 .putExtra(EXTRA_TYPE, type.name)
             intervals?.let { intent.putExtra(EXTRA_WORKOUT, it.toIntArray()) }
             ContextCompat.startForegroundService(context, intent)
+        }
+
+        /** Continues an interrupted recording from its saved draft. */
+        fun resumeDraft(context: Context) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, TrackingService::class.java).setAction(ACTION_RESUME_DRAFT),
+            )
         }
 
         fun finish(context: Context, title: String?, feel: String?) {

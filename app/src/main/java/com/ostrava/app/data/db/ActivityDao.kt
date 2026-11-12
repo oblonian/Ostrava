@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 data class SegmentWithStats(
@@ -27,6 +28,8 @@ data class RankedEffort(
     val distanceMeters: Double,
     val durationMillis: Long,
     val effortRank: Int,
+    /** How many efforts exist for this sport and distance, this one included. */
+    val attempts: Int,
 )
 
 /** How many all-time records an activity currently holds. */
@@ -84,6 +87,15 @@ interface ActivityDao {
 
     @Query("UPDATE activities SET title = :title WHERE id = :id")
     suspend fun renameActivity(id: Long, title: String)
+
+    @Update
+    suspend fun updateActivity(activity: ActivityEntity)
+
+    @Query("DELETE FROM track_points WHERE activityId = :activityId AND (time < :fromTime OR time > :toTime)")
+    suspend fun deleteTrackPointsOutside(activityId: Long, fromTime: Long, toTime: Long)
+
+    @Query("DELETE FROM segment_efforts WHERE activityId = :activityId")
+    suspend fun deleteSegmentEffortsForActivity(activityId: Long)
 
     // Segments
 
@@ -147,7 +159,9 @@ interface ActivityDao {
         "SELECT e.label AS label, e.distanceMeters AS distanceMeters, " +
             "e.durationMillis AS durationMillis, " +
             "(SELECT COUNT(*) FROM best_efforts o WHERE o.activityType = e.activityType " +
-            "AND o.label = e.label AND o.durationMillis < e.durationMillis) + 1 AS effortRank " +
+            "AND o.label = e.label AND o.durationMillis < e.durationMillis) + 1 AS effortRank, " +
+            "(SELECT COUNT(*) FROM best_efforts o WHERE o.activityType = e.activityType " +
+            "AND o.label = e.label) AS attempts " +
             "FROM best_efforts e WHERE e.activityId = :activityId ORDER BY e.distanceMeters"
     )
     fun observeRankedEfforts(activityId: Long): Flow<List<RankedEffort>>

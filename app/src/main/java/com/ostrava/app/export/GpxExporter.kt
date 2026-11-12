@@ -19,7 +19,8 @@ object GpxExporter {
         val sb = StringBuilder()
         sb.append("""<?xml version="1.0" encoding="UTF-8"?>""").append('\n')
         sb.append(
-            """<gpx version="1.1" creator="Ostrava" xmlns="http://www.topografix.com/GPX/1/1">"""
+"""<gpx version="1.1" creator="Ostrava" xmlns="http://www.topografix.com/GPX/1/1" """ +
+                """xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1">"""
         ).append('\n')
         sb.append("  <metadata>\n")
         sb.append("    <name>").append(escapeXml(activity.title)).append("</name>\n")
@@ -38,6 +39,11 @@ object GpxExporter {
                 sb.append("        <time>")
                     .append(timestampFormatter.format(Instant.ofEpochMilli(point.timeMillis)))
                     .append("</time>\n")
+                point.heartRate?.let { heartRate ->
+                    sb.append("        <extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>")
+                        .append(heartRate)
+                        .append("</gpxtpx:hr></gpxtpx:TrackPointExtension></extensions>\n")
+                }
                 sb.append("      </trkpt>\n")
             }
             sb.append("    </trkseg>\n")

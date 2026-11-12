@@ -50,6 +50,8 @@ object BackupManager {
                             put(p.timeMillis)
                             put(p.speedMps.toDouble())
                             put(p.segment)
+                            // Optional 7th element; older backups and the iOS app omit it.
+                            put(p.heartRate ?: JSONObject.NULL)
                         })
                     }
                 })
@@ -125,6 +127,7 @@ object BackupManager {
                     timeMillis = p.getLong(3),
                     speedMps = p.getDouble(4).toFloat(),
                     segment = p.getInt(5),
+                    heartRate = if (p.length() > 6 && !p.isNull(6)) p.getInt(6) else null,
                 )
             }
             repository.saveActivityWithEfforts(

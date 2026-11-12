@@ -3,10 +3,12 @@ package com.ostrava.app.export
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.LinearGradient
-import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -21,8 +23,10 @@ import kotlin.math.roundToInt
 
 enum class ShareTemplate(val label: String) {
     PHOTO("Photo"),
+    MAP("Map"),
     ROUTE("Route"),
     MINIMAL("Minimal"),
+    STICKER("Sticker"),
 }
 
 enum class ShareAspect(val label: String, val width: Int, val height: Int) {
@@ -55,8 +59,15 @@ data class ShareSpec(
     val stats: List<ShareStat> = listOf(ShareStat.DISTANCE, ShareStat.PACE, ShareStat.TIME),
     val showRoute: Boolean = true,
     val showPrBadge: Boolean = true,
-    /** Extra darkening over the photo, 0 (none) to 0.7. */
+    /** Extra darkening over the photo or map, 0 (none) to 0.7. */
     val photoDim: Float = 0.2f,
+    /** Puts the title and stats at the top instead of the bottom, e.g. to clear a face. */
+    val textAtTop: Boolean = false,
+    /** 1 = the photo just fills the card; larger values zoom in. */
+    val photoZoom: Float = 1f,
+    /** Which point of the photo (0..1 on each axis) sits at the centre of the card. */
+    val photoCenterX: Float = 0.5f,
+    val photoCenterY: Float = 0.5f,
 )
 
 data class ShareStatValue(val stat: ShareStat, val value: String, val label: String)
@@ -71,12 +82,23 @@ data class ShareContent(
 )
 
 /**
+ * A map image the size of the card, plus the projection that places a coordinate on it.
+ * Built by [MapBackdropLoader]; the renderer draws the route with [project] so it lines
+ * up with the streets underneath.
+ */
+class MapBackdrop(
+    val bitmap: Bitmap,
+    val project: (latitude: Double, longitude: Double) -> PointF,
+)
+
+/**
  * Draws a shareable activity card onto a bitmap. Pure android.graphics so the same
  * code produces the on-screen preview (at a reduced [scale]) and the exported image.
  */
 object ShareCardRenderer {
 
     const val MAX_STATS = 6
+    const val MAX_PHOTO_ZOOM = 4f
 
     private const val MARGIN = 72f
     private const val ROW_HEIGHT = 164f
@@ -94,7 +116,63 @@ object ShareCardRenderer {
         val shadow: Boolean,
     )
 
-    fun render(spec: ShareSpec, content: ShareContent, photo: Bitmap?, scale: Float = 1f): Bitmap {
+    /** What is behind the text, which decides the colours and how the route is drawn. */
+    private enum class Backdrop { PHOTO, MAP, TRANSPARENT, GRADIENT, PAPER }
+
+    /** Where the photo is drawn so that it covers the card with the requested zoom and pan. */
+    fun photoPlacement(spec: ShareSpec, photoWidth: Int, photoHeight: Int): RectF {
+        val width = spec.aspect.width.toFloat()
+        val height = spec.aspect.height.toFloat()
+        val scale = max(width / photoWidth, height / photoHeight) *
+            spec.photoZoom.coerceIn(1f, MAX_PHOTO_ZOOM)
+        val drawWidth = photoWidth * scale
+        val drawHeight = photoHeight * scale
+        // Clamp the centre so the photo always covers the whole card.
+        val halfX = width / (2f * drawWidth)
+        val halfY = height / (2f * drawHeight)
+        val centerX = spec.photoCenterX.coerceIn(halfX, 1f - halfX)
+        val centerY = spec.photoCenterY.coerceIn(halfY, 1f - halfY)
+        val left = width / 2f - centerX * drawWidth
+        val top = height / 2f - centerY * drawHeight
+        return RectF(left, top, left + drawWidth, top + drawHeight)
+    }
+
+    /**
+     * Applies a drag ([dxFraction], [dyFraction] as fractions of the card's width and
+     * height) and a pinch ([zoomChange]) to the photo framing.
+     */
+    fun movePhoto(
+        spec: ShareSpec,
+        photoWidth: Int,
+        photoHeight: Int,
+        dxFraction: Float,
+        dyFraction: Float,
+        zoomChange: Float,
+    ): ShareSpec {
+        val zoomed = spec.copy(photoZoom = (spec.photoZoom * zoomChange).coerceIn(1f, MAX_PHOTO_ZOOM))
+        val placement = photoPlacement(zoomed, photoWidth, photoHeight)
+        val width = spec.aspect.width.toFloat()
+        val height = spec.aspect.height.toFloat()
+        val moved = zoomed.copy(
+            // Dragging right shows more of the photo's left side, so the centre moves left.
+            photoCenterX = (width / 2f - placement.left) / placement.width() - dxFraction * width / placement.width(),
+            photoCenterY = (height / 2f - placement.top) / placement.height() - dyFraction * height / placement.height(),
+        )
+        // Re-clamp through photoPlacement so the stored centre never drifts out of range.
+        val clamped = photoPlacement(moved, photoWidth, photoHeight)
+        return moved.copy(
+            photoCenterX = (width / 2f - clamped.left) / clamped.width(),
+            photoCenterY = (height / 2f - clamped.top) / clamped.height(),
+        )
+    }
+
+    fun render(
+        spec: ShareSpec,
+        content: ShareContent,
+        photo: Bitmap?,
+        map: MapBackdrop? = null,
+        scale: Float = 1f,
+    ): Bitmap {
         val width = spec.aspect.width.toFloat()
         val height = spec.aspect.height.toFloat()
         val bitmap = Bitmap.createBitmap(
@@ -105,103 +183,175 @@ object ShareCardRenderer {
         val canvas = Canvas(bitmap)
         canvas.scale(scale, scale)
 
-        val usePhoto = spec.template == ShareTemplate.PHOTO && photo != null
-        val palette = when {
-            usePhoto -> Palette(Color.WHITE, withAlpha(Color.WHITE, 0.8f), ORANGE, Color.WHITE, Color.WHITE, true)
-            spec.template == ShareTemplate.MINIMAL ->
-                Palette(NAVY, withAlpha(NAVY, 0.6f), ORANGE, ORANGE, Color.WHITE, false)
-            else -> {
-                // The photo template without a photo falls back to the Midnight gradient.
-                val theme = if (spec.template == ShareTemplate.PHOTO) ShareTheme.MIDNIGHT else spec.theme
-                Palette(
-                    text = Color.WHITE,
-                    secondary = withAlpha(Color.WHITE, 0.72f),
-                    accent = theme.accent,
-                    route = theme.accent,
-                    onAccent = if (luminance(theme.accent) > 0.6f) NAVY else Color.WHITE,
-                    shadow = false,
-                )
-            }
+        val backdrop = when (spec.template) {
+            ShareTemplate.PHOTO -> if (photo != null) Backdrop.PHOTO else Backdrop.GRADIENT
+            ShareTemplate.MAP -> if (map != null) Backdrop.MAP else Backdrop.GRADIENT
+            ShareTemplate.STICKER -> Backdrop.TRANSPARENT
+            ShareTemplate.MINIMAL -> Backdrop.PAPER
+            ShareTemplate.ROUTE -> Backdrop.GRADIENT
         }
-
-        drawBackground(canvas, spec, photo, width, height)
-
-        val selected = spec.stats.mapNotNull { stat -> content.stats.firstOrNull { it.stat == stat } }
-            .take(MAX_STATS)
-        val hero = if (spec.template == ShareTemplate.MINIMAL) selected.firstOrNull() else null
-        val gridStats = if (hero != null) selected.drop(1) else selected
-
-        val textTop = drawTextBlock(
-            canvas = canvas,
-            width = width,
-            height = height,
-            content = content,
-            stats = gridStats,
-            prText = if (spec.showPrBadge) content.prText else null,
-            palette = palette,
-        )
-
-        drawBrand(canvas, palette)
-        var contentTop = MARGIN + 70f
-        val wantsRoute = spec.showRoute && content.points.size >= 2
-        if (hero != null) {
-            val heroHeight = heroHeight(hero, width, palette)
-            val roomForRoute = textTop - 64f - (contentTop + heroHeight + 24f)
-            // With no route below it, the hero number sits in the middle of the free space.
-            val top = if (wantsRoute && roomForRoute >= MIN_ROUTE_SIZE) contentTop
-            else contentTop + ((textTop - contentTop - heroHeight) / 2f - 20f).coerceAtLeast(0f)
-            contentTop = drawHero(canvas, hero, width, top, palette)
+        // Templates that fall back to a gradient (no photo yet, map unavailable) use Midnight.
+        val theme = if (spec.template == ShareTemplate.ROUTE) spec.theme else ShareTheme.MIDNIGHT
+        val palette = when (backdrop) {
+            Backdrop.PHOTO, Backdrop.TRANSPARENT ->
+                Palette(Color.WHITE, withAlpha(Color.WHITE, 0.85f), ORANGE, Color.WHITE, Color.WHITE, true)
+            Backdrop.MAP ->
+                Palette(Color.WHITE, withAlpha(Color.WHITE, 0.85f), ORANGE, ORANGE, Color.WHITE, true)
+            Backdrop.PAPER -> Palette(NAVY, withAlpha(NAVY, 0.6f), ORANGE, ORANGE, Color.WHITE, false)
+            Backdrop.GRADIENT -> Palette(
+                text = Color.WHITE,
+                secondary = withAlpha(Color.WHITE, 0.72f),
+                accent = theme.accent,
+                route = theme.accent,
+                onAccent = if (luminance(theme.accent) > 0.6f) NAVY else Color.WHITE,
+                shadow = false,
+            )
         }
+        // The minimal card is built around its big number at the top, so its text stays below.
+        val textAtTop = spec.textAtTop && backdrop != Backdrop.PAPER
 
-        if (wantsRoute) {
-            val rect = if (usePhoto) {
-                // Over a photo the route is a small overlay so it doesn't fight the picture.
-                val size = min(width * 0.36f, textTop - contentTop - 40f)
-                RectF(width - MARGIN - size, MARGIN, width - MARGIN, MARGIN + size)
-            } else {
-                RectF(MARGIN + 24f, contentTop + 24f, width - MARGIN - 24f, textTop - 64f)
-            }
-            if (rect.width() >= MIN_ROUTE_SIZE && rect.height() >= MIN_ROUTE_SIZE) {
-                drawRoute(canvas, content.points, rect, palette, thin = usePhoto)
-            }
-        }
-        return bitmap
-    }
-
-    private fun drawBackground(canvas: Canvas, spec: ShareSpec, photo: Bitmap?, width: Float, height: Float) {
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        when {
-            spec.template == ShareTemplate.MINIMAL -> canvas.drawColor(PAPER)
-            spec.template == ShareTemplate.PHOTO && photo != null -> {
-                // Centre-crop the photo to fill the card.
-                val scale = max(width / photo.width, height / photo.height)
-                val matrix = Matrix().apply {
-                    setScale(scale, scale)
-                    postTranslate((width - photo.width * scale) / 2f, (height - photo.height * scale) / 2f)
-                }
-                canvas.drawBitmap(photo, matrix, paint)
-                val dim = spec.photoDim.coerceIn(0f, 0.7f)
-                if (dim > 0f) canvas.drawColor(withAlpha(Color.BLACK, dim))
-                // Scrims keep the text legible whatever the photo looks like.
-                paint.shader = LinearGradient(
-                    0f, height * 0.38f, 0f, height,
-                    Color.TRANSPARENT, withAlpha(Color.BLACK, 0.82f), Shader.TileMode.CLAMP,
-                )
-                canvas.drawRect(0f, height * 0.38f, width, height, paint)
-                paint.shader = LinearGradient(
-                    0f, 0f, 0f, 300f,
-                    withAlpha(Color.BLACK, 0.45f), Color.TRANSPARENT, Shader.TileMode.CLAMP,
-                )
-                canvas.drawRect(0f, 0f, width, 300f, paint)
-            }
-            else -> {
-                val theme = if (spec.template == ShareTemplate.PHOTO) ShareTheme.MIDNIGHT else spec.theme
-                paint.shader = LinearGradient(
-                    0f, 0f, width, height, theme.start, theme.end, Shader.TileMode.CLAMP,
-                )
+        when (backdrop) {
+            Backdrop.PHOTO -> drawPhoto(canvas, spec, photo!!, width, height, textAtTop)
+            Backdrop.MAP -> drawMap(canvas, spec, map!!, width, height, textAtTop)
+            Backdrop.TRANSPARENT -> Unit
+            Backdrop.PAPER -> canvas.drawColor(PAPER)
+            Backdrop.GRADIENT -> {
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+                paint.shader = LinearGradient(0f, 0f, width, height, theme.start, theme.end, Shader.TileMode.CLAMP)
                 canvas.drawRect(0f, 0f, width, height, paint)
             }
         }
+
+        val selected = spec.stats.mapNotNull { stat -> content.stats.firstOrNull { it.stat == stat } }
+            .take(MAX_STATS)
+        val hero = if (backdrop == Backdrop.PAPER) selected.firstOrNull() else null
+        val gridStats = if (hero != null) selected.drop(1) else selected
+        val prText = if (spec.showPrBadge) content.prText else null
+
+        drawBrand(canvas, palette)
+        val belowBrand = MARGIN + 70f
+        val blockHeight = textBlockHeight(gridStats.size, prText != null)
+        val blockBottom = if (textAtTop) belowBrand + 24f + blockHeight else height - MARGIN
+        val blockTop = drawTextBlock(canvas, width, blockBottom, content, gridStats, prText, palette)
+
+        // The space left over for the route (and the minimal card's big number).
+        var freeTop = if (textAtTop) blockBottom + 64f else belowBrand
+        val freeBottom = if (textAtTop) height - MARGIN else blockTop - 64f
+
+        val wantsRoute = spec.showRoute && content.points.size >= 2
+        if (hero != null) {
+            val heroHeight = heroHeight(hero, width, palette)
+            val roomForRoute = freeBottom - (freeTop + heroHeight + 24f)
+            // With no route below it, the hero number sits in the middle of the free space.
+            val top = if (wantsRoute && roomForRoute >= MIN_ROUTE_SIZE) freeTop
+            else freeTop + ((blockTop - freeTop - heroHeight) / 2f - 20f).coerceAtLeast(0f)
+            freeTop = drawHero(canvas, hero, width, top, palette)
+        }
+
+        if (wantsRoute) {
+            when (backdrop) {
+                Backdrop.MAP -> drawProjectedRoute(canvas, content.points, map!!)
+                Backdrop.PHOTO -> {
+                    // Over a photo the route is a small corner overlay so it doesn't fight the picture.
+                    val size = min(width * 0.36f, freeBottom - freeTop - 40f)
+                    val top = if (textAtTop) height - MARGIN - size else MARGIN
+                    val rect = RectF(width - MARGIN - size, top, width - MARGIN, top + size)
+                    if (size >= MIN_ROUTE_SIZE) drawRoute(canvas, content.points, rect, palette, thin = true)
+                }
+                else -> {
+                    val rect = RectF(MARGIN + 24f, freeTop + 24f, width - MARGIN - 24f, freeBottom)
+                    if (rect.width() >= MIN_ROUTE_SIZE && rect.height() >= MIN_ROUTE_SIZE) {
+                        drawRoute(canvas, content.points, rect, palette, thin = false)
+                    }
+                }
+            }
+        }
+
+        if (backdrop == Backdrop.MAP) drawAttribution(canvas, width, height, textAtTop)
+        return bitmap
+    }
+
+    private fun drawPhoto(canvas: Canvas, spec: ShareSpec, photo: Bitmap, width: Float, height: Float, textAtTop: Boolean) {
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        canvas.drawBitmap(photo, null, photoPlacement(spec, photo.width, photo.height), paint)
+        drawDimAndScrims(canvas, spec.photoDim, width, height, textAtTop)
+    }
+
+    private fun drawMap(canvas: Canvas, spec: ShareSpec, map: MapBackdrop, width: Float, height: Float, textAtTop: Boolean) {
+        // Muted colours keep the map from competing with the route and the text.
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0.55f) })
+        }
+        canvas.drawBitmap(map.bitmap, null, RectF(0f, 0f, width, height), paint)
+        drawDimAndScrims(canvas, max(spec.photoDim, 0.15f), width, height, textAtTop)
+    }
+
+    /** Darkens the backdrop and adds gradients behind the text so it stays legible. */
+    private fun drawDimAndScrims(canvas: Canvas, dimAmount: Float, width: Float, height: Float, textAtTop: Boolean) {
+        val dim = dimAmount.coerceIn(0f, 0.7f)
+        if (dim > 0f) canvas.drawColor(withAlpha(Color.BLACK, dim))
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val strong = withAlpha(Color.BLACK, 0.82f)
+        val light = withAlpha(Color.BLACK, 0.45f)
+        if (textAtTop) {
+            paint.shader = LinearGradient(0f, 0f, 0f, height * 0.62f, strong, Color.TRANSPARENT, Shader.TileMode.CLAMP)
+            canvas.drawRect(0f, 0f, width, height * 0.62f, paint)
+            paint.shader = LinearGradient(0f, height - 300f, 0f, height, Color.TRANSPARENT, light, Shader.TileMode.CLAMP)
+            canvas.drawRect(0f, height - 300f, width, height, paint)
+        } else {
+            paint.shader = LinearGradient(0f, height * 0.38f, 0f, height, Color.TRANSPARENT, strong, Shader.TileMode.CLAMP)
+            canvas.drawRect(0f, height * 0.38f, width, height, paint)
+            paint.shader = LinearGradient(0f, 0f, 0f, 300f, light, Color.TRANSPARENT, Shader.TileMode.CLAMP)
+            canvas.drawRect(0f, 0f, width, 300f, paint)
+        }
+    }
+
+    /** Map data must be credited wherever it is shown. */
+    private fun drawAttribution(canvas: Canvas, width: Float, height: Float, textAtTop: Boolean) {
+        val paint = textPaint(22f, withAlpha(Color.WHITE, 0.75f), bold = false, shadow = true).apply {
+            textAlign = Paint.Align.RIGHT
+        }
+        val baseline = if (textAtTop) height - 28f else MARGIN + 28f
+        canvas.drawText("© OpenStreetMap contributors", width - MARGIN, baseline, paint)
+    }
+
+    /** Draws the route in map coordinates so it follows the streets on the map backdrop. */
+    private fun drawProjectedRoute(canvas: Canvas, points: List<TrackPoint>, map: MapBackdrop) {
+        val casing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = 19f
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            setShadowLayer(10f, 0f, 3f, withAlpha(Color.BLACK, 0.5f))
+        }
+        val line = Paint(casing).apply {
+            clearShadowLayer()
+            color = ORANGE
+            strokeWidth = 11f
+        }
+        val positions = points.map { map.project(it.latitude, it.longitude) }
+        val paths = points.indices.groupBy { points[it].segment }.toSortedMap().values
+            .filter { it.size >= 2 }
+            .map { indices ->
+                Path().apply {
+                    indices.forEachIndexed { i, index ->
+                        val position = positions[index]
+                        if (i == 0) moveTo(position.x, position.y) else lineTo(position.x, position.y)
+                    }
+                }
+            }
+        paths.forEach { canvas.drawPath(it, casing) }
+        paths.forEach { canvas.drawPath(it, line) }
+
+        val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+        val core = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ORANGE }
+        val first = positions.first()
+        val last = positions.last()
+        canvas.drawCircle(first.x, first.y, 15f, dot)
+        canvas.drawCircle(first.x, first.y, 8f, core)
+        canvas.drawCircle(last.x, last.y, 15f, core)
+        canvas.drawCircle(last.x, last.y, 7f, dot)
     }
 
     private fun drawBrand(canvas: Canvas, palette: Palette) {
@@ -234,28 +384,40 @@ object ShareCardRenderer {
         return baseline + 80f
     }
 
+    private fun gridColumns(statCount: Int): Int = when (statCount) {
+        0 -> 0
+        1, 2, 3 -> statCount
+        4 -> 2
+        else -> 3
+    }
+
+    private fun gridHeight(statCount: Int): Float {
+        val columns = gridColumns(statCount)
+        if (columns == 0) return 0f
+        return ceil(statCount / columns.toFloat()).toInt() * ROW_HEIGHT - 40f
+    }
+
+    /** Height of the text block drawn by [drawTextBlock], so it can also be anchored to the top. */
+    private fun textBlockHeight(statCount: Int, hasBadge: Boolean): Float {
+        val grid = gridHeight(statCount)
+        return grid + (if (grid > 0f) 72f else 0f) + 116f + (if (hasBadge) 78f else 0f)
+    }
+
     /**
-     * Title, date, optional PR badge and the stats grid, anchored to the bottom edge.
-     * Returns the y of the block's top so the route can use the space above it.
+     * Title, date, optional PR badge and the stats grid, laid out upwards from [bottom].
+     * Returns the y of the block's top.
      */
     private fun drawTextBlock(
         canvas: Canvas,
         width: Float,
-        height: Float,
+        bottom: Float,
         content: ShareContent,
         stats: List<ShareStatValue>,
         prText: String?,
         palette: Palette,
     ): Float {
-        val columns = when (stats.size) {
-            0 -> 0
-            1, 2, 3 -> stats.size
-            4 -> 2
-            else -> 3
-        }
-        val rows = if (columns == 0) 0 else ceil(stats.size / columns.toFloat()).toInt()
-        val gridHeight = if (rows == 0) 0f else rows * ROW_HEIGHT - 40f
-        val gridTop = height - MARGIN - gridHeight
+        val columns = gridColumns(stats.size)
+        val gridTop = bottom - gridHeight(stats.size)
 
         if (columns > 0) {
             val cellWidth = (width - 2 * MARGIN) / columns
