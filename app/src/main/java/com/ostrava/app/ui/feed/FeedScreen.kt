@@ -89,6 +89,7 @@ fun FeedScreen(
             ActivityCard(
                 activity = activity,
                 track = track,
+                recordCount = uiState.recordCounts[activity.id] ?: 0,
                 imperial = uiState.settings.imperialUnits,
                 onClick = { onActivityClick(activity.id) },
                 modifier = Modifier.animateItem(),
@@ -138,6 +139,7 @@ private fun WeeklySummaryCard(summary: WeeklySummary, imperial: Boolean, weeklyG
 private fun ActivityCard(
     activity: ActivityEntity,
     track: List<TrackPoint>,
+    recordCount: Int,
     imperial: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -173,6 +175,14 @@ private fun ActivityCard(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (recordCount > 0) {
+                        Text(
+                            text = if (recordCount == 1) "🏆 Personal record" else "🏆 $recordCount personal records",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
                 if (track.size >= 2) {
                     Box(Modifier.size(72.dp)) {

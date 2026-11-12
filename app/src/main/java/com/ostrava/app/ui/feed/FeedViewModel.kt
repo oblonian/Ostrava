@@ -26,6 +26,8 @@ data class FeedUiState(
     val activities: List<ActivityEntity> = emptyList(),
     val settings: UserSettings = UserSettings(),
     val weeklySummary: WeeklySummary = WeeklySummary(),
+    /** Activity id -> number of personal records it currently holds. */
+    val recordCounts: Map<Long, Int> = emptyMap(),
     val loading: Boolean = true,
 )
 
@@ -50,11 +52,13 @@ class FeedViewModel(
     val uiState: StateFlow<FeedUiState> = combine(
         repository.observeActivities(),
         settingsRepository.settings,
-    ) { activities, settings ->
+        repository.observeRecordCounts(),
+    ) { activities, settings, recordCounts ->
         FeedUiState(
             activities = activities,
             settings = settings,
             weeklySummary = computeWeeklySummary(activities),
+            recordCounts = recordCounts,
             loading = false,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FeedUiState())

@@ -15,6 +15,7 @@ import com.ostrava.app.domain.TrackPoint
 import com.ostrava.app.domain.bestEffortsFor
 import com.ostrava.app.domain.matchSegment
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 class ActivityRepository(private val dao: ActivityDao) {
 
@@ -98,6 +99,10 @@ class ActivityRepository(private val dao: ActivityDao) {
         dao.observeRankedEfforts(activityId)
 
     fun observeAllBestEfforts(): Flow<List<EffortWithActivity>> = dao.observeAllBestEfforts()
+
+    /** Activity id -> number of all-time records it currently holds. */
+    fun observeRecordCounts(): Flow<Map<Long, Int>> =
+        dao.observeRecordCounts().map { rows -> rows.associate { it.activityId to it.recordCount } }
 
     suspend fun deleteActivity(id: Long) = dao.deleteActivity(id)
 

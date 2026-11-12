@@ -29,6 +29,12 @@ data class RankedEffort(
     val effortRank: Int,
 )
 
+/** How many all-time records an activity currently holds. */
+data class ActivityRecordCount(
+    val activityId: Long,
+    val recordCount: Int,
+)
+
 data class EffortWithActivity(
     val activityId: Long,
     val activityType: String,
@@ -154,4 +160,12 @@ interface ActivityDao {
             "ORDER BY e.distanceMeters, e.durationMillis"
     )
     fun observeAllBestEfforts(): Flow<List<EffortWithActivity>>
+
+    @Query(
+        "SELECT e.activityId AS activityId, COUNT(*) AS recordCount FROM best_efforts e " +
+            "WHERE NOT EXISTS (SELECT 1 FROM best_efforts o WHERE o.activityType = e.activityType " +
+            "AND o.label = e.label AND o.durationMillis < e.durationMillis) " +
+            "GROUP BY e.activityId"
+    )
+    fun observeRecordCounts(): Flow<List<ActivityRecordCount>>
 }

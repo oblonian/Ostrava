@@ -133,9 +133,13 @@ class DatabaseTest {
                 // 1 km at 3.5 m/s is ~286 s; allow for point spacing.
                 assertTrue(oneKm.durationMillis in 280_000L..292_000L)
 
+                // Only the record holder is flagged on the feed.
+                assertEquals(mapOf(fastId to 3), repository.observeRecordCounts().first())
+
                 // Deleting the record holder promotes the remaining effort.
                 repository.deleteActivity(fastId)
                 assertTrue(repository.observeRankedEfforts(slowId).first().all { it.effortRank == 1 })
+                assertEquals(mapOf(slowId to 3), repository.observeRecordCounts().first())
             }
         } finally {
             db.close()

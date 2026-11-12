@@ -3,6 +3,7 @@ import SwiftUI
 
 struct FeedView: View {
     @Query(sort: \Activity.startTime, order: .reverse) private var activities: [Activity]
+    @Query private var bestEfforts: [BestEffortRecord]
     @AppStorage(SettingsKeys.userName) private var userName = "Athlete"
     @AppStorage(SettingsKeys.imperialUnits) private var imperial = false
     @AppStorage(SettingsKeys.weeklyGoalKm) private var weeklyGoalKm = 25.0
@@ -28,7 +29,11 @@ struct FeedView: View {
                 }
                 ForEach(activities) { activity in
                     NavigationLink(value: activity.uid) {
-                        ActivityRow(activity: activity, imperial: imperial)
+                        ActivityRow(
+                            activity: activity,
+                            recordCount: recordCounts[activity.uid] ?? 0,
+                            imperial: imperial
+                        )
                     }
                 }
             }
@@ -39,6 +44,21 @@ struct FeedView: View {
                 }
             }
         }
+    }
+
+    /// Activity uid -> number of all-time records it currently holds.
+    private var recordCounts: [UUID: Int] {
+        var fastest: [String: BestEffortRecord] = [:]
+        for effort in bestEfforts {
+            let key = "\(effort.activityTypeRaw)|\(effort.label)"
+            if let current = fastest[key], current.duration <= effort.duration { continue }
+            fastest[key] = effort
+        }
+        var counts: [UUID: Int] = [:]
+        for record in fastest.values {
+            counts[record.activityUid, default: 0] += 1
+        }
+        return counts
     }
 
     private var thisWeek: [Activity] {
@@ -84,6 +104,7 @@ struct FeedView: View {
 
 private struct ActivityRow: View {
     let activity: Activity
+    let recordCount: Int
     let imperial: Bool
 
     @State private var thumbnailPoints: [TrackPoint] = []
@@ -104,6 +125,11 @@ private struct ActivityRow: View {
                     Text(formatDateTime(activity.startTime))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if recordCount > 0 {
+                        Text(recordCount == 1 ? "🏆 Personal record" : "🏆 \(recordCount) personal records")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tint)
+                    }
                 }
                 Spacer()
                 if thumbnailPoints.count >= 2 {
